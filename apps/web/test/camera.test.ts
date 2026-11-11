@@ -34,6 +34,32 @@ describe("camera framing with the east street block", () => {
     expect(cam.x).toBeCloseTo((map.width * TILE) / 2, 0);
   });
 
+  test("after panning / zooming by hand, the east block no longer snaps the view back", () => {
+    const { cam, map } = camera(false);
+    let east = false;
+    cam.fitWidth = () => (east ? map.width * TILE : OFFICE_COLS * TILE);
+    const handlers = new Map<string, (e: unknown) => void>();
+    const el = {
+      addEventListener: (type: string, fn: (e: unknown) => void) => handlers.set(type, fn),
+      getBoundingClientRect: () => ({ left: 0, top: 0 }),
+    } as unknown as HTMLElement;
+    cam.attach(el);
+    cam.zoomToFit(true);
+    handlers.get("wheel")!({
+      preventDefault() {},
+      deltaY: -300,
+      ctrlKey: false,
+      clientX: 400,
+      clientY: 300,
+    });
+    for (let i = 0; i < 60; i++) cam.update(1 / 30);
+    const before = { x: cam.x, zoom: cam.zoom };
+    east = true;
+    for (let i = 0; i < 120; i++) cam.update(1 / 30);
+    expect(cam.zoom).toBeCloseTo(before.zoom, 5);
+    expect(cam.x).toBeCloseTo(before.x, 5);
+  });
+
   test("zooming out by hand still reaches the whole map", () => {
     const { cam, map } = camera();
     cam.fitWidth = () => OFFICE_COLS * TILE;

@@ -236,7 +236,7 @@ async function boot() {
   if (zoomParam === "fit") camera.zoomToFit(true);
   else if (zoomParam && Number(zoomParam) > 0)
     camera.set({ x: 25 * 16, y: 15 * 16, zoom: Number(zoomParam) }, true);
-  else if (app.screen.width / scene.widthPx > 1.6)
+  else if (app.screen.width / (OFFICE_COLS * 16) > 1.6)
     camera.set({ x: 32 * 16, y: 15 * 16, zoom: 2 }, true);
   else camera.set({ x: 22 * 16, y: 14 * 16, zoom: 2 }, true);
 

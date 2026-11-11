@@ -178,6 +178,8 @@ export class Camera {
     this.lastInput = performance.now();
     this.hold = false;
     this.followT = 0;
+    // panned / zoomed by hand: no longer the fit view (no re-fit when the east block changes)
+    this.fitted = false;
   }
 
   attach(el: HTMLElement) {
