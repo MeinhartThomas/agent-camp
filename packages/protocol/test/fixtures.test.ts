@@ -119,9 +119,10 @@ describe("negative parsing", () => {
     }
   });
   test("invalid avatar in avatar.updated", () => {
+    // unknown ids fall back (see "viewers tolerate catalog ids"), but not a missing avatar
     const m = load("avatar.updated") as { data: { avatar: Record<string, unknown> } };
-    const avatar = { ...m.data.avatar, hairStyle: "afro-unicorn" };
-    expect(parseViewerMessage({ ...m, data: { ...m.data, avatar } }).ok).toBe(false);
+    for (const avatar of [undefined, null, "afro-unicorn", 42])
+      expect(parseViewerMessage({ ...m, data: { ...m.data, avatar } }).ok).toBe(false);
   });
 });
 
@@ -174,6 +175,22 @@ describe("avatars", () => {
       expect([a.outfit, a.leftHand, a.rightHand]).toEqual(["jacket", "none", "none"]);
       expect(a.accessory).not.toBe("cap-mint");
     }
+  });
+  test("viewers tolerate catalog ids from a newer server", () => {
+    const raw = load("avatar.updated") as { data: { avatar: Record<string, unknown> } };
+    raw.data.avatar = {
+      ...raw.data.avatar,
+      accessory: "top-hat-from-the-future",
+      outfit: "space-suit",
+      deskProps: ["plant", "hologram", "plant"],
+    };
+    const r = parseViewerMessage(raw);
+    if (!r.ok) throw new Error(r.error);
+    if (r.msg.type !== "avatar.updated") throw new Error("wrong type");
+    expect(r.msg.data.avatar.accessory).toBe("none");
+    expect(r.msg.data.avatar.outfit).toBe("jacket");
+    expect(r.msg.data.avatar.leftHand).toBe("none");
+    expect(r.msg.data.avatar.deskProps).toEqual(["plant"]);
   });
   test("coerceAvatar falls back on garbage", () => {
     expect(coerceAvatar({ hairStyle: "nope" }, "anna")).toEqual(avatarFromSeed("anna"));
