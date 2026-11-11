@@ -16,6 +16,8 @@
  */
 
 export const TILE = 16;
+/** Columns of the original office (desks, rooms, garden); the east street block comes after. */
+export const OFFICE_COLS = 64;
 
 /** Terrain legend. */
 export const TERRAIN = {
@@ -459,6 +461,8 @@ const BASE_POIS: readonly Poi[] = [
 
 /** Bar spots (only while the bar is open). */
 export const isBarPoi = (p: Poi) => p.area === "bar";
+/** The 4 stools at the bar counter (seated facing away from the camera). */
+export const isBarStool = (p: Poi) => p.id.startsWith("bar-");
 /** Smokers' corner spots (outside the shop, always open). */
 export const isSmokePoi = (p: Poi) => p.id.startsWith("smoke-");
 /** Inside the shop (only while it is open). */

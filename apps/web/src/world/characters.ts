@@ -97,6 +97,7 @@ import {
   clampDesks,
   type Facing,
   isBarPoi,
+  isBarStool,
   isShopPoi,
   isSmokePoi,
   MAX_DESKS,
@@ -1113,9 +1114,17 @@ export class CharacterManager {
   private place(c: SessionCharacter) {
     c.sprite.position.set(Math.round(c.x), Math.round(c.y));
     c.sprite.zIndex = c.y;
-    const showMug = c.mugT > 0 && c.facing !== "up" && (c.mode === "walking" || c.mode === "poi");
+    // at the bar counter (stool, back to the camera) the glass stands on the counter beside them
+    const onCounter =
+      c.mugT > 0 && c.mode === "poi" && c.facing === "up" && !!c.poi && isBarStool(c.poi);
+    const showMug =
+      onCounter || (c.mugT > 0 && c.facing !== "up" && (c.mode === "walking" || c.mode === "poi"));
     c.mug.visible = showMug;
-    if (showMug) {
+    if (onCounter) {
+      c.mug.position.set(Math.round(c.x + 9), Math.round(c.y - 28));
+      c.mug.zIndex = c.y - 0.5;
+      c.mug.texture = CARRY_TEXTURES[c.carry]()[Math.floor(this.clock * 2.5) % 2]!;
+    } else if (showMug) {
       const side = c.facing === "left" ? -6 : c.facing === "right" ? 6 : 6;
       const lift = c.anim === "sitFront" ? 4 : 0;
       c.mug.position.set(Math.round(c.x + side), Math.round(c.y - 6 - lift));
@@ -1874,6 +1883,9 @@ export class CharacterManager {
       c.facing = c.poi?.face ?? "down";
       const quick = c.poi?.id === "coffee" || c.poi?.id === "tap" || c.poi?.id === "shop-counter";
       c.timer = quick ? 3 + this.rand() * 2 : (10 + this.rand() * 15) * this.dwell;
+      // a seat at the counter comes with a beer (it stands on the counter beside them)
+      if (c.poi && isBarStool(c.poi) && (c.carry !== "beer" || c.mugT < c.timer + 5))
+        this.hold(c, "beer", c.timer + 20 + this.rand() * 40);
       c.puffT = 0.4;
     } else if (c.goal === "lunch") {
       c.mode = "poi";

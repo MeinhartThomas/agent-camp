@@ -53,6 +53,7 @@ import {
   type AreaName,
   BASE_POD_ROWS,
   buildOfficeMap,
+  OFFICE_COLS,
   POD_COLS,
   podDeskSpan,
   podOrigin,
@@ -221,6 +222,12 @@ async function boot() {
     },
   );
   camera.attach(app.canvas);
+  // wall screens and the fit view frame the office (64 columns); the east street block joins
+  // the frame only while someone is there, so tiles stay big on a 1080p wall
+  camera.fitWidth = () =>
+    chars.positions().some((p) => p.x >= OFFICE_COLS * 16) ? scene.widthPx : OFFICE_COLS * 16;
+  camera.skipStop = (name) =>
+    (name === "bar" && !scene.barOpen) || (name === "shop" && !scene.shopOpen);
   const minimap = new Minimap(hud.minimapHost, camera, chars);
   minimap.setTerrain(scene.terrainCanvas);
   minimap.desks = () => scene.deskRects();
