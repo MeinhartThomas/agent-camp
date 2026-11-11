@@ -200,7 +200,7 @@ try {
   await page.locator(".claim-form input").fill(macCodes.get("Player One")!);
   await page.locator(".claim-form button").click();
   await page.locator(".look-studio").waitFor();
-  console.log("PASS: looks are owner-only; a code on the Mac proves who you are");
+  console.log("PASS: looks are owner-only (courtesy lock: a code on that person's Mac)");
   await pick("accessory", "cat-ears");
   await pick("wrist", "neon-cyan");
   await pick("outfit", "cat");
