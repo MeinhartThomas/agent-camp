@@ -442,7 +442,13 @@ async function boot() {
     hud.onClaim = {
       send: async (personId) => {
         const r = await postJson(`/api/people/${encodeURIComponent(personId)}/claim`, {});
-        return r.ok ? { ok: true, message: "code sent, check the notification on your Mac" } : r;
+        return r.ok
+          ? {
+              ok: true,
+              message:
+                "code sent as a notification on your Mac (needs notifications on for the Agent Office connector). Nothing after 30 s? Send again.",
+            }
+          : r;
       },
       verify: async (personId, code) => {
         const r = await postJson(`/api/people/${encodeURIComponent(personId)}/claim/verify`, {

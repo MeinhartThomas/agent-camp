@@ -432,6 +432,22 @@ describe("OfficeApp look editor", () => {
     expect((await post(app, "/api/people/nobody/claim", {}, "7.7.7.7"))!.status).toBe(404);
   });
 
+  test("at most 10 codes per person per day, so guessing and Mac spam stay bounded", async () => {
+    const t = setup();
+    t.app.connectorMessage("s1", hello("Tom"));
+    for (let i = 0; i < 10; i++) {
+      expect((await post(t.app, "/api/people/tom/claim", {}, `10.0.0.${i}`))!.status).toBe(200);
+      t.advance(30_000);
+      t.app.connectorMessage("s1", hello("Tom")); // keep the connector fresh
+    }
+    const r = (await post(t.app, "/api/people/tom/claim", {}, "10.0.1.1"))!;
+    expect(r.status).toBe(429);
+    expect(t.toConnector).toHaveLength(10);
+    t.advance(86_400_000);
+    t.app.connectorMessage("s1", hello("Tom"));
+    expect((await post(t.app, "/api/people/tom/claim", {}, "10.0.1.2"))!.status).toBe(200);
+  });
+
   test("an expired code is rejected", async () => {
     const t = setup();
     t.app.connectorMessage("s1", hello("Tom"));

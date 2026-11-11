@@ -249,7 +249,7 @@ export class Hud {
   previewLook: (avatar: AvatarSpec, agent: AgentKind) => HTMLCanvasElement[] = () => [];
   /** whether a person's look is custom (GET /api/people/:id/avatar); null = unknown */
   fetchLookCustom: (personId: string) => Promise<boolean | null> = async () => null;
-  /** person this browser proved to be ("This is me" code); only their look is editable */
+  /** person this browser confirmed to be ("It's me" code); only their look is editable */
   me: string | null = null;
   /** demo feed: no server, every look is editable */
   editAnyLook = false;
@@ -841,13 +841,14 @@ export class Hud {
   }
 
   /**
-   * "This is me": a code goes to the person's Macs as a notification; typing it here proves
-   * this browser is them, and from then on it may change that look (and only that one).
+   * "This is me": a code goes to the person's Macs as a notification; typing it here marks
+   * this browser as them, and from then on it may change that look (and only that one). A
+   * courtesy lock against restyling colleagues, not real identity (see DECISIONS L9).
    */
   private buildClaim(p: PersonState): HTMLElement {
     const box = el("div", "claim");
     box.innerHTML = `
-      <div class="claim-title">Is this you? Prove it to change this look.</div>
+      <div class="claim-title">Is this you? Confirm with a code from your Mac to change this look.</div>
       <button type="button" class="pixel-btn claim-send" title="A 6-digit code pops up on this person's Mac">&#128274; It's me: send a code</button>
       <form class="claim-form" hidden>
         <input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6-digit code" aria-label="code from the Mac notification">

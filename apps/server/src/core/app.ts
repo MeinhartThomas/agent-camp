@@ -66,6 +66,8 @@ export const POKE_PER_PERSON_MS = 10_000;
 export const CLAIM_CODE_TTL_MS = 5 * 60_000;
 export const CLAIM_RESEND_MS = 30_000;
 export const CLAIM_MAX_TRIES = 5;
+/** Codes per person per day (UTC): bounds guessing and notification spam on their Mac. */
+export const CLAIM_MAX_PER_DAY = 10;
 /** One look change per viewer (IP) this often. */
 export const LOOK_MIN_INTERVAL_MS = 1_000;
 
@@ -433,6 +435,8 @@ export class OfficeApp {
   /**
    * "This is me": send a one-time code as a notification to the person's live Macs (the
    * poke channel, so every connector shows it). Whoever can read it there may edit the look.
+   * A courtesy lock, not identity: a connector's person is just the name it reports with the
+   * shared password, so a colleague could start one under someone else's name.
    */
   private async sendClaimCode(req: Request, personId: string): Promise<Response> {
     const now = this.now();
@@ -446,6 +450,14 @@ export class OfficeApp {
     const sockets = this.hub.liveSocketsOf(personId, now);
     if (sockets.length === 0)
       return json({ error: "no Mac of theirs is connected right now" }, { status: 409 });
+    const dayKey = `claim.day.${personId}.${new Date(now).toISOString().slice(0, 10)}`;
+    const today = Number(this.store.kvGet(dayKey) ?? 0);
+    if (today >= CLAIM_MAX_PER_DAY)
+      return json(
+        { error: "too many codes for this person today, try again tomorrow" },
+        { status: 429 },
+      );
+    this.store.kvPut(dayKey, String(today + 1));
     this.lastClaim.set(personId, now);
     this.lastClaim.set(`ip:${who}`, now);
     if (this.lastClaim.size > 500) this.lastClaim.clear();
