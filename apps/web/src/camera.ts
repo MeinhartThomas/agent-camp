@@ -294,6 +294,9 @@ export class Camera {
       "game",
       "desks",
       "garden",
+      "bar",
+      "desks",
+      "shop",
       "all",
     ];
     let stop = stops[this.tourIdx++ % stops.length]!;
