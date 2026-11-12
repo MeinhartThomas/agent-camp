@@ -41,6 +41,7 @@ import {
   type SetGifRequest,
 } from "@agent-office/protocol";
 import { Application, TextureStyle } from "pixi.js";
+import { ArenaPanel } from "./arenaPanel.ts";
 import { CHAR_H, CHAR_RES, CHAR_W, lookFor, lookPreview } from "./art/characters.ts";
 import { fitText } from "./art/font.ts";
 import { trophyCanvas } from "./art/fun.ts";
@@ -72,6 +73,7 @@ import { type ModelChange, OfficeModel } from "./state/officeModel.ts";
 import { Celebration } from "./ui/celebration.ts";
 import { MessagesPanel, storedMessageRead } from "./ui/messages.ts";
 import { Minimap } from "./ui/minimap.ts";
+import { ArenaWorld } from "./world/arena.ts";
 import { CharacterManager } from "./world/characters.ts";
 import { CatColony } from "./world/colony.ts";
 import { Effects } from "./world/effects.ts";
@@ -192,6 +194,7 @@ async function boot() {
   const chars = new CharacterManager(scene, model, effects);
   const gifs = showGifs ? new HeadGifs(scene.fx, model, chars) : null;
   const partyWorld = new PartyWorld(scene, chars, model);
+  const arenaWorld = new ArenaWorld(scene);
   // Friday after work (`?demo=feierabend`, or `?feierabend=1` on a live feed): happy hour at
   // 17:30, office life at party speed, the weed shop sells more
   const feierabend = demo === "feierabend" || flag("feierabend");
@@ -363,6 +366,7 @@ async function boot() {
   const minimap = new Minimap(hud.minimapHost, camera, chars);
   minimap.setTerrain(scene.terrainCanvas);
   minimap.desks = () => scene.deskRects();
+  minimap.arena = () => (model.arena?.enabled ? arenaWorld.positions() : []);
 
   // initial view
   if (zoomParam === "fit") camera.zoomToFit(true);
@@ -375,8 +379,13 @@ async function boot() {
   // ---- events -----------------------------------------------------------------------------
   const ensureCapacity = () => {
     const need = model.podCount();
-    if (need <= scene.map.podRows * POD_COLS) return;
-    scene.rebuild(buildOfficeMap(podRowsFor(need)));
+    const arena = !!model.arena?.enabled;
+    if (
+      need <= scene.map.podRows * POD_COLS &&
+      arena === scene.map.areas.some((a) => a.name === "arena")
+    )
+      return;
+    scene.rebuild(buildOfficeMap(Math.max(scene.map.podRows, podRowsFor(need)), arena));
     colony.setMap(scene.map);
     queen.setMap(scene.map);
     chef.setMap(scene.map);
@@ -395,6 +404,7 @@ async function boot() {
   let messagesClient: MessagesClient | null = null;
   const messageModel = new MessageModel(storedMessageRead(), () => Date.now() + model.clockSkew);
   let demoMe = false;
+  let arenaPanel: ArenaPanel | null = null;
   /** runs after every message (e.g. a ?focus= waiting for its person to show up) */
   let afterIngest = () => {};
   const ingest = (msg: ServerToViewer) => {
@@ -424,8 +434,10 @@ async function boot() {
       hud.me = model.people.keys().next().value ?? null;
     }
     partyWorld.setState(model.party);
+    arenaWorld.setState(model.arena?.match ?? null);
     games?.refresh();
     messagesPanel?.refresh();
+    arenaPanel?.refresh();
     ensureCapacity();
     colony.sync(catCount(model.people.size));
     for (const ch of changes) {
@@ -521,6 +533,23 @@ async function boot() {
       messagesPanel?.clear();
     };
   }
+  arenaPanel = new ArenaPanel(host, model, {
+    key,
+    claim: () =>
+      hud.openMeMenu({
+        why: "Confirm it's you to enter the arena.",
+        after: () => arenaPanel?.open(),
+      }),
+    focus: () => camera.focusArea("arena"),
+    ingest: (arena) =>
+      ingest({
+        v: 1,
+        type: "arena.updated",
+        id: crypto.randomUUID(),
+        ts: Date.now(),
+        data: { arena },
+      }),
+  });
 
   chars.onMoment = (m) => {
     if (m.kind === "joined") camera.notify(m.x, m.y, { zoom: 3, hold: 10, rush: true });
@@ -779,7 +808,10 @@ async function boot() {
     }
   };
   // one "me" everywhere: the games drawer plays as the person this browser is confirmed to be
-  hud.onMeChange = (me) => games?.setMe(me);
+  hud.onMeChange = (me) => {
+    games?.setMe(me);
+    arenaPanel?.setMe(me);
+  };
   // ?key= viewers have no session cookie: without the key the server would not say who I am
   const keyQuery = key ? `?key=${encodeURIComponent(key)}` : "";
   if (demo) hud.editAnyLook = true;
@@ -896,7 +928,10 @@ async function boot() {
   };
   hud.onOpenSession = (id) => void openSession(id);
   camera.holdWhile = () =>
-    hud.panelOpen || hud.lookEditorOpen || (messagesPanel?.expanded ?? false);
+    hud.panelOpen ||
+    hud.lookEditorOpen ||
+    (messagesPanel?.expanded ?? false) ||
+    !!arenaPanel?.isOpen;
   hud.onPanelChange = () => {
     if (hud.panelOpen && matchMedia("(max-width: 560px)").matches && messagesPanel?.expanded)
       messagesPanel.collapse(false);
@@ -931,6 +966,10 @@ async function boot() {
       };
 
   camera.onTap = (wx, wy) => {
+    if (!kiosk && arenaWorld.entranceHit(wx, wy)) {
+      arenaPanel?.open();
+      return;
+    }
     if (!kiosk && life.hitCar(wx, wy)) {
       location.href = key ? `./stats?key=${encodeURIComponent(key)}` : "./stats";
       return;
@@ -1226,6 +1265,7 @@ async function boot() {
     chars.update(dt, time);
     gifs?.update(dt);
     partyWorld.update(dt, time);
+    arenaWorld.update(dt);
     colony.update(dt, time);
     // cats coming in or going home get the door opened too
     if (!scene.doorWanted) {

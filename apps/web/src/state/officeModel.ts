@@ -10,6 +10,7 @@
 import {
   type Activity,
   type AgentKind,
+  type ArenaState,
   type AvatarSpec,
   avatarFromSeed,
   type HelperSkin,
@@ -66,6 +67,7 @@ const ACTIVITY_LOG_MS = 60 * 60_000;
 
 export type ModelChange =
   | { kind: "partyChanged" }
+  | { kind: "arenaChanged" }
   | { kind: "officeRenamed"; name: string }
   | { kind: "personAdded"; personId: string; instant: boolean }
   | { kind: "personRemoved"; personId: string; instant: boolean }
@@ -123,6 +125,7 @@ function dayKey(ts: number): string {
 }
 
 export class OfficeModel {
+  arena: ArenaState | undefined;
   party: PartyState = { events: [], scores: {} };
   officeName = "Agent Office";
   timezone: string | undefined;
@@ -222,6 +225,8 @@ export class OfficeModel {
       case "office.snapshot": {
         const d = msg.data;
         this.party = d.party ?? { events: [], scores: {} };
+        if (this.arena !== undefined || d.arena !== undefined) out.push({ kind: "arenaChanged" });
+        this.arena = d.arena;
         this.timezone = d.timezone;
         this.clockSkew = d.serverTime - this.now();
         if (d.officeName && d.officeName !== this.officeName) {
@@ -347,6 +352,10 @@ export class OfficeModel {
         });
         break;
       }
+      case "arena.updated":
+        this.arena = msg.data.arena;
+        out.push({ kind: "arenaChanged" });
+        break;
       case "party.updated":
         this.party = msg.data.party;
         out.push({ kind: "partyChanged" });

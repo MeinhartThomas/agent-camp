@@ -9,6 +9,7 @@
  * Parsers never throw; they return { ok: true, msg } | { ok: false, error }.
  */
 import { z } from "zod";
+import { ArenaState } from "./arena.ts";
 import { ViewerAvatar } from "./catalog.ts";
 import { MAX_SELF_DESCRIPTION, PROTOCOL_VERSION, SHORT_SELF_DESCRIPTION } from "./constants.ts";
 import { GiphyId } from "./giphy.ts";
@@ -240,6 +241,7 @@ export const OfficeSnapshot = msg(
   z.object({
     officeName: z.string(),
     party: ViewerPartyState.optional().catch(undefined),
+    arena: ArenaState.optional().catch(undefined),
     serverTime: EpochMs,
     people: z.array(PersonView),
     /** IANA zone of the office (for day/night lighting), e.g. "Europe/Vienna" */
@@ -380,6 +382,7 @@ export const MessageDeleted = msg(
   "message.deleted",
   z.object({ messageId: z.string().min(1).max(64) }),
 );
+export const ArenaUpdated = msg("arena.updated", z.object({ arena: ArenaState }));
 
 export const PartyUpdated = msg("party.updated", z.object({ party: ViewerPartyState }));
 
@@ -394,6 +397,7 @@ export const ServerToViewer = z.discriminatedUnion("type", [
   MessageSent,
   MessageDeleted,
   PartyUpdated,
+  ArenaUpdated,
   PersonJoined,
   PersonLeft,
   SessionStarted,
@@ -424,6 +428,7 @@ export type ViewerEvent = Exclude<
       | "office.snapshot"
       | "interaction.happened"
       | "party.updated"
+      | "arena.updated"
       | "message.sent"
       | "message.deleted";
   }

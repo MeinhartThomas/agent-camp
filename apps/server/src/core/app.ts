@@ -25,6 +25,9 @@ import {
   type ViewerEvent,
 } from "@agent-office/protocol";
 import { z } from "zod";
+import { ArenaRateLimit } from "./arena/budget.ts";
+import type { ArenaEnv } from "./arena/provider.ts";
+import { ArenaService } from "./arena/service.ts";
 import {
   isAuthorized,
   ME_TTL_MS,
@@ -51,19 +54,20 @@ import { Party, readPartyBody } from "./party.ts";
 import { computeOfficeDay, computePersonDay, computeStats, historyToCsv } from "./stats.ts";
 import type { Store } from "./store.ts";
 
-export type AppEnv = GenuiEnv & {
-  CONNECTOR_PASSWORD?: string;
-  VIEWER_KEY?: string;
-  LATEST_CONNECTOR_VERSION?: string;
-  MIN_CONNECTOR_VERSION?: string;
-  /** "owner/repo" whose latest GitHub release is the connector version (LATEST_CONNECTOR_VERSION=auto) */
-  GITHUB_REPO?: string;
-  SERVER_VERSION?: string;
-  OFFICE_NAME?: string;
-  OFFICE_TIMEZONE?: string;
-  /** "1" = local dev: CONNECTOR_PASSWORD defaults to "devpass" */
-  DEV_MODE?: string;
-};
+export type AppEnv = GenuiEnv &
+  ArenaEnv & {
+    CONNECTOR_PASSWORD?: string;
+    VIEWER_KEY?: string;
+    LATEST_CONNECTOR_VERSION?: string;
+    MIN_CONNECTOR_VERSION?: string;
+    /** "owner/repo" whose latest GitHub release is the connector version (LATEST_CONNECTOR_VERSION=auto) */
+    GITHUB_REPO?: string;
+    SERVER_VERSION?: string;
+    OFFICE_NAME?: string;
+    OFFICE_TIMEZONE?: string;
+    /** "1" = local dev: CONNECTOR_PASSWORD defaults to "devpass" */
+    DEV_MODE?: string;
+  };
 
 export interface Transport {
   /** send to every connected viewer */
@@ -172,6 +176,8 @@ export class OfficeApp {
   private lastPoke = new Map<string, number>();
   readonly messages: OfficeMessages;
   readonly party: Party;
+  readonly arena: ArenaService;
+  private arenaRequests = new ArenaRateLimit();
   private lastLook = new Map<string, number>();
   private lastDescribe = new Map<string, number>();
   /** studio Generates the server's provider is drawing: person -> its studio token, start */
@@ -186,6 +192,18 @@ export class OfficeApp {
     private opts: { now?: () => number; fetch?: FetchLike; log?: (line: string) => void } = {},
   ) {
     this.party = new Party(store);
+    this.arena = new ArenaService(env, store, {
+      publish: (arena) =>
+        transport.broadcast(
+          JSON.stringify(envelope("arena.updated", { arena }, { ts: this.now() })),
+        ),
+      schedule: () => this.scheduleAlarm(),
+      background: (p) => {
+        transport.waitUntil?.(p);
+      },
+      now: () => this.now(),
+      ...(opts.fetch ? { fetch: opts.fetch } : {}),
+    });
     const log = opts.log ?? ((l: string) => console.log(l));
     this.timezone = env.OFFICE_TIMEZONE || "Europe/Vienna";
     const maxGenerates = Number.parseInt(env.GENUI_MAX_CALLS_PER_PERSON ?? "", 10);
@@ -234,6 +252,7 @@ export class OfficeApp {
   /** Rebuild state after a restart / hibernation wake. */
   restore(sockets: { socketId: string; binding: Binding | null }[]): void {
     this.hub.restore(this.now(), sockets);
+    this.arena.tick();
     this.scheduleAlarm();
   }
 
@@ -274,13 +293,20 @@ export class OfficeApp {
     const version = v !== "dev" ? v : this.latest.current;
     return {
       ...snap,
-      data: { ...snap.data, today, party: this.party.state(now), ...(version ? { version } : {}) },
+      data: {
+        ...snap.data,
+        today,
+        party: this.party.state(now),
+        ...(this.arena.enabled ? { arena: this.arena.state() } : {}),
+        ...(version ? { version } : {}),
+      },
     };
   }
 
   alarm(): void {
     this.publish(this.hub.tick(this.now()));
     this.messages.prune(this.now());
+    this.arena.tick();
     this.scheduleAlarm();
   }
 
@@ -312,9 +338,11 @@ export class OfficeApp {
   }
 
   private scheduleAlarm(): void {
-    const deadlines = [this.hub.nextDeadline(), this.messages.nextDeadline()].filter(
-      (n): n is number => n !== null,
-    );
+    const deadlines = [
+      this.hub.nextDeadline(),
+      this.messages.nextDeadline(),
+      this.arena.deadline(),
+    ].filter((n): n is number => n !== null);
     this.transport.scheduleAlarm(deadlines.length ? Math.min(...deadlines) : null);
   }
 
@@ -516,6 +544,42 @@ export class OfficeApp {
     const method = req.method.toUpperCase();
 
     if (path === "/api/state" && method === "GET") return json(this.snapshot());
+
+    if (path === "/api/arena/me" && method === "GET") {
+      if (!this.arena.enabled) return json({ error: "Arena is disabled" }, { status: 404 });
+      if (!(await isAuthorized(req, this.env, this.now())))
+        return json({ error: "unauthorized" }, { status: 401 });
+      const personId = await meFromRequest(req, this.env, this.now());
+      return json({ personId, prompt: personId ? this.arena.ownPrompt(personId) : null });
+    }
+    if (path === "/api/arena") {
+      if (!this.arena.enabled) return json({ error: "Arena is disabled" }, { status: 404 });
+      if (!(await isAuthorized(req, this.env, this.now())))
+        return json({ error: "unauthorized" }, { status: 401 });
+      if (method === "GET") return json(this.arena.state());
+      if (method !== "POST") return json({ error: "method not allowed" }, { status: 405 });
+      const origin = req.headers.get("origin");
+      if ((origin && origin !== url.origin) || req.headers.get("sec-fetch-site") === "cross-site")
+        return json({ error: "cross-origin mutation denied" }, { status: 403 });
+      const who = (
+        req.headers.get("cf-connecting-ip") ??
+        req.headers.get("x-forwarded-for") ??
+        "-"
+      ).slice(0, 128);
+      if (!this.arenaRequests.allow(who, this.now()))
+        return json({ error: "slow down" }, { status: 429, headers: { "retry-after": "1" } });
+      const me = await meFromRequest(req, this.env, this.now());
+      if (!me)
+        return json({ error: "Confirm your identity using your nameplate first" }, { status: 403 });
+      const body = await readPartyBody(req);
+      if (body.status) return json({ error: "Invalid or oversized JSON" }, { status: body.status });
+      const person = this.hub
+        .state()
+        .people.find((p) => p.personId === me && this.hub.liveSocketsOf(me, this.now()).length > 0);
+      const result = this.arena.mutate(body.value, me, person);
+      this.scheduleAlarm();
+      return json(result.body, { status: result.status });
+    }
 
     if (path === "/api/me" && method === "GET")
       return json({ ok: true, personId: await meFromRequest(req, this.env, this.now()) });
@@ -778,7 +842,7 @@ export class OfficeApp {
     if (m && method === "GET") {
       const png = this.store.getSnapshot(Number(m[1]));
       if (!png) return json({ error: "not found" }, { status: 404 });
-      return new Response(png, {
+      return new Response(png.slice().buffer, {
         headers: {
           "content-type": "image/png",
           "cache-control": "public, max-age=31536000, immutable",
@@ -941,7 +1005,7 @@ export class OfficeApp {
     const events = this.hub.setGif(personId, gif, this.now());
     if (!events) return json({ error: "not in the office" }, { status: 404 });
     this.publish(events);
-    this.transport.scheduleAlarm(this.hub.nextDeadline());
+    this.scheduleAlarm();
     return json({ personId, gif: gif ?? null } satisfies SetGifResponse);
   }
 
