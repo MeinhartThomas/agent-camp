@@ -18,6 +18,7 @@ import {
 } from "../art/vehicles.ts";
 import type { Effects } from "./effects.ts";
 import { isFullMoon, type Season, type SkyNow, truckWindow, werewolfHour } from "./lifeRules.ts";
+import { type LinzRect, linzLayout } from "./linzLayout.ts";
 import { TILE } from "./map.ts";
 import type { OfficeScene } from "./office.ts";
 
@@ -178,6 +179,7 @@ class Forest {
   private nextWolf = 40 + Math.random() * 80;
   private nextEyes = 3;
   private howled = "";
+  private forest: LinzRect | null = null;
 
   constructor(
     layers: Layers,
@@ -203,7 +205,9 @@ class Forest {
   }
 
   update(dt: number, time: number, active: boolean, day: string) {
-    const { w } = this.world();
+    const { w, h } = this.world();
+    if (!this.forest || this.forest.h !== h - 100) this.forest = linzLayout(w, h).forest;
+    const forest = this.forest;
     if (!active) {
       for (const e of this.eyes) e.sprite.visible = false;
       if (this.wolfMode !== "none") this.wolfMode = "none";
@@ -211,7 +215,7 @@ class Forest {
       this.wolfEye.visible = false;
       return;
     }
-    // eyes open somewhere in the forest above the office, blink, and are gone again
+    // The north is city/water now; forest life stays in the west-side woods.
     this.nextEyes -= dt;
     if (this.nextEyes <= 0) {
       this.nextEyes = 4 + Math.random() * 9;
@@ -220,8 +224,8 @@ class Forest {
         e.t = 0;
         e.life = 4 + Math.random() * 5;
         e.sprite.position.set(
-          Math.round(-SURROUND_PX + 20 + Math.random() * (w + 2 * SURROUND_PX - 40)),
-          Math.round(-75 + Math.random() * 50),
+          Math.round(forest.x + 16 + Math.random() * (forest.w - 32)),
+          Math.round(forest.y + 16 + Math.random() * (forest.h - 32)),
         );
         e.sprite.visible = true;
       }
@@ -240,25 +244,25 @@ class Forest {
       if (this.nextWolf > 0) return;
       this.nextWolf = 90 + Math.random() * 150;
       this.wolfDir = Math.random() < 0.5 ? 1 : -1;
-      this.wolfX = this.wolfDir > 0 ? -SURROUND_PX : w + SURROUND_PX;
+      this.wolfX = this.wolfDir > 0 ? forest.x : forest.x + forest.w;
       this.wolfMode = "trot";
       this.wolfT = 0;
       this.wolf.visible = true;
       this.wolf.scale.x = this.wolfDir;
     }
-    const y = -18;
+    const y = Math.round(forest.y + forest.h / 2);
     this.wolfT += dt;
     if (this.wolfMode === "trot") {
       this.wolfX += this.wolfDir * 34 * dt;
       this.wolf.texture = werewolfTextures()[Math.floor(time * 6) % 2]!;
-      const mid = Math.abs(this.wolfX - w / 2) < 20;
+      const mid = Math.abs(this.wolfX - (forest.x + forest.w / 2)) < 20;
       if (mid && this.howled !== day && isFullMoon(Date.now())) {
         this.howled = day;
         this.wolfMode = "howl";
         this.wolfT = 0;
         this.effects.floater(textBubbleTexture("AWOOOO!"), this.wolfX, y - 18, 3.5, 12);
       }
-      if (this.wolfX < -SURROUND_PX - 30 || this.wolfX > w + SURROUND_PX + 30) {
+      if (this.wolfX < forest.x || this.wolfX > forest.x + forest.w) {
         this.wolfMode = "none";
         this.wolf.visible = false;
       }
