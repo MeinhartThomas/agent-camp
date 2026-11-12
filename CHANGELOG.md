@@ -8,6 +8,8 @@ banner after a deploy.
 ## 2026-11-12
 
 - ⚔️ Optional Prompt Arena: write private tactics and watch 2–8 avatars fight live, with weapons, pickups, spectators, rankings and opt-in post-match prompt reveals (off until configured by the office owner)
+- `agent-office status --json` now gives scripts a privacy-safe health snapshot, without config, project names or server credentials
+- 🚢 Schiffe versenken and Vier gewinnt: challenge a colleague from their nameplate and play a move whenever you get to it; your portrait in the top bar shows when it is your turn
 - 🎀 New looks for your character: a curved hairband (hidden from behind, unlike the straight headband), longer sweaters and shirts that hang down over the hips instead of looking like a crop top, and lots of colourful clips in the hair
 - 🎨 Customize look is simpler: one tab to describe your look (a new AI look goes live right away, nothing to save) and one to pick parts (with its own Save). Saving no longer quietly swaps your AI look for a rough copy, and reopening shows the look you actually wear
 - When your Mac can't draw your look, the studio now says why and how to fix it (e.g. "your Mac reconnected: confirm it's you again", right there with a new code) instead of "ask the office admin"; if Claude Code fails on your Mac you see its error within seconds, not after a silent 5-minute wait
