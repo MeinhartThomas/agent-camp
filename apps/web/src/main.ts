@@ -7,6 +7,7 @@
  *   ?bar=open|closed  ?shop=open|closed  ignore the opening hours (17-02 / 10-20)
  *   ?weather=sun|clouds|rain|snow  force the weather (default: changes hour by hour, seeded)
  *   ?season=winter|spring|summer|autumn  force the season (default: the local month)
+ *   ?spectacle=conga|ufo|disco  preview an office show on this screen
  *   ?lively=1     office life at party speed (chattier, waits count 10x, pizza drone in 3 s)
  *   ?key=...      viewer key passed through to /ws/viewer
  *   ?kiosk=1      iPad kiosk (no cursor, big text, no panels, wake lock, 30 fps, auto-tour,
@@ -73,6 +74,7 @@ import { type ModelChange, OfficeModel } from "./state/officeModel.ts";
 import { Celebration } from "./ui/celebration.ts";
 import { MessagesPanel, storedMessageRead } from "./ui/messages.ts";
 import { Minimap } from "./ui/minimap.ts";
+import { spectacleControls } from "./ui/spectacles.ts";
 import { CharacterManager } from "./world/characters.ts";
 import { CatColony } from "./world/colony.ts";
 import { Effects } from "./world/effects.ts";
@@ -98,6 +100,8 @@ import { PortalDuo } from "./world/portalCharacters.ts";
 import { OfficeQueen } from "./world/queen.ts";
 import { Richard } from "./world/richard.ts";
 import { SalesChef } from "./world/salesChef.ts";
+import { SPECTACLES, type Spectacle } from "./world/spectacleRules.ts";
+import { OfficeSpectacles } from "./world/spectacles.ts";
 
 type OfficeApi = {
   ready: boolean;
@@ -125,6 +129,11 @@ type OfficeApi = {
   portalCharacters(): { x: number; y: number; mode: string } | null;
   /** where Richard is and what he is up to (inside = in the server cabin) */
   richard(): { x: number; y: number; mode: string; inside: boolean; burning: boolean } | null;
+  spectacles: {
+    trigger(kind: Spectacle): boolean;
+    quack(): boolean;
+    status(): ReturnType<OfficeSpectacles["status"]>;
+  };
   /** slow down / freeze the world clock (screenshots of short moments); 1 = normal */
   setSpeed(k: number): void;
 };
@@ -194,6 +203,15 @@ async function boot() {
   const chars = new CharacterManager(scene, model, effects);
   const gifs = showGifs ? new HeadGifs(scene.fx, model, chars) : null;
   const partyWorld = new PartyWorld(scene, chars, model);
+  const spectacleParam = params.get("spectacle") as Spectacle | null;
+  const spectacles = new OfficeSpectacles(
+    scene,
+    chars,
+    model,
+    effects,
+    spectacleParam && SPECTACLES.includes(spectacleParam) ? spectacleParam : null,
+  );
+  if (!kiosk && !nohud) spectacleControls(host, spectacles);
   // Friday after work (`?demo=feierabend`, or `?feierabend=1` on a live feed): happy hour at
   // 17:30, office life at party speed, the weed shop sells more
   const feierabend = demo === "feierabend" || flag("feierabend");
@@ -369,6 +387,8 @@ async function boot() {
   // the frame only while someone is there, so tiles stay big on a 1080p wall
   camera.fitWidth = () =>
     chars.positions().some((p) => p.x >= OFFICE_COLS * 16) ? scene.widthPx : OFFICE_COLS * 16;
+  spectacles.onMoment = (_kind, spot) =>
+    camera.notify(spot.x, spot.y, { zoom: 1.4, hold: 6, ambient: true });
   camera.skipStop = (name) =>
     (name === "bar" && !scene.barOpen) || (name === "shop" && !scene.shopOpen);
   const minimap = new Minimap(hud.minimapHost, camera, chars);
@@ -968,6 +988,12 @@ async function boot() {
       };
 
   camera.onTap = (wx, wy) => {
+    if (spectacles.tap(wx, wy)) return;
+    const spectacleActor = spectacles.pick(wx, wy);
+    if (!kiosk && spectacleActor) {
+      openSession(spectacleActor.sessionId);
+      return;
+    }
     if (!kiosk && life.hitCar(wx, wy)) {
       location.href = key ? `./stats?key=${encodeURIComponent(key)}` : "./stats";
       return;
@@ -1263,6 +1289,7 @@ async function boot() {
     const t0 = performance.now();
     const dt = Math.min(0.1, deltaMS / 1000) * speed;
     time += dt;
+    spectacles.beforeFrame();
     scene.update(time, dt);
     chars.update(dt, time);
     gifs?.update(dt);
@@ -1280,6 +1307,7 @@ async function boot() {
     kurt.update(dt, time);
     duo?.update(dt, time);
     life.update(dt, time);
+    spectacles.update(dt, time);
     effects.update(dt);
     living.update(dt);
     camera.update(dt);
@@ -1337,6 +1365,11 @@ async function boot() {
         fr.onload = () => resolve(fr.result as string);
         fr.readAsDataURL(blob);
       });
+    },
+    spectacles: {
+      trigger: (kind) => SPECTACLES.includes(kind) && spectacles.trigger(kind),
+      quack: () => spectacles.quackNow(),
+      status: () => spectacles.status(),
     },
     characters: () => chars.chars.size,
     cats: () => colony.cats().length,

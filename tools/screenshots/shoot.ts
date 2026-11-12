@@ -1189,6 +1189,13 @@ declare global {
     __office: {
       ready: boolean;
       fps(): number;
+      characters(): number;
+      spectacles: Pick<
+        import("../../apps/web/src/world/spectacles.ts").OfficeSpectacles,
+        "trigger" | "status"
+      > & {
+        quack(): boolean;
+      };
       model: { people: Map<string, unknown>; sessions: Map<string, unknown> };
       camera: {
         zoomToFit(): void;
