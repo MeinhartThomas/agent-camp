@@ -70,9 +70,20 @@ the connector reads only single-line values there, so use `configure --descripti
 
 ```sh
 agent-office status      # connected? which sessions does it see?
+agent-office status --json # machine-readable, privacy-safe health snapshot
 agent-office logs        # follow the log
 agent-office uninstall   # stop and remove everything
 ```
+
+`status --json` prints exactly one JSON object (`schemaVersion: 1`): `connectorVersion`
+(the CLI version), `daemonRunning`, `connected`, `updatedAt` (epoch milliseconds, or `null`
+when missing/invalid), and `sessions`. A daemon is running only with a live positive PID and
+a status update less than 10 seconds old (not future-dated); connected also requires an open
+socket and the server's welcome. Stale/dead daemons have no sessions. Sessions contain only
+`agent`, `activity`, `subagents`, `startedAt`, and optional numeric `context` (0–1)—no project
+names, identifiers, config, server URLs or errors. Missing/corrupt status is reported as
+not running. Like text status, this exits 0 even when disconnected; check the JSON booleans
+for health checks.
 
 ![Installer and status](screenshots/10-terminal-install.png)
 
@@ -308,9 +319,9 @@ are robots by default; `agent-office configure --helpers cats` turns them into k
 (`--helpers robots` switches back). Restart the connector to apply it:
 `launchctl kickstart -k gui/$(id -u)/dev.agentoffice.connector`.
 
-Richard, the IT guy, lives in the wooden server cabin in the garden. Every few minutes the
+The IT guy lives in the wooden server cabin in the garden. Every few minutes the
 cabin catches fire and he runs out with the extinguisher. Every minute or so a developer
-shouts for more RAM (the one whose agent's context window is fullest goes first); Richard gets
+shouts for more RAM (the one whose agent's context window is fullest goes first); the IT guy gets
 a stick from the cabin and slots it into the server rack on the desk floor. He is drawn in every browser
 and needs no data, so nothing about him is sent anywhere.
 
@@ -447,12 +458,25 @@ It writes desktop/mobile screenshots to `/private/tmp/agent-office-party-shots` 
 | `/`                  | The office. Drag to pan, wheel/pinch to zoom. Click a character for its agent card, a nameplate for the person. Both have buttons to wave, ask for a coffee, cheer, open Office Messages with that person selected, send a cat to sit on their desk, or throw a paper ball (office only). There is one office cat, plus one for every two people (up to 10), and four cats who live there: Cece and Jess are always hungry and go from desk to desk begging the people at working agents for treats and, at mealtimes, for a meal; Kiwi has the zoomies; Eloy goes round every dev at a desk and meows at them. Click a cat to pet it and open its card, then feed it, toss it a yarn ball, or get out the laser pointer and tap the floor. |
 | `/?kiosk=1`          | Wall/iPad mode: no chrome, bigger text, auto camera tour. Add it to the iPad home screen; it also records the timelapse (`&recorder=1`). |
 | `/?kiosk=1&gifs=0`   | The kiosk without head GIFs (nothing is loaded from Giphy on that screen). |
-| `/?richard=0`        | No Richard on this screen: no cabin fires, no RAM runs (the cabin stays). |
+| `/?itguy=0`          | No IT guy on this screen: no cabin fires, no RAM runs (the cabin stays). |
 | `/?toons=0`          | No portal characters on this screen. They are off on the kiosk by default; `/?kiosk=1&toons=1` brings them back there. |
 | `/?bow=1`            | The hourly bow at the head desk every minute instead of on the full hour (demos, screenshots). |
 | `/?kiosk=1&view=overview` | Big wall screen: the whole office most of the time, a 12 s close-up of the busiest pod (or whoever waits) every 2 min (`&every=<seconds>`); events still get a short look. |
 | `/stats`             | Weekday × hour heatmap, leaderboards, Claude vs Codex vs Pi, CSV export. |
-| `/timelapse`         | Snapshots of the office every 15 minutes, with a play button.          |
+| `/timelapse`         | Snapshots every 15 minutes: All or a selected day, with playback controls. |
+
+### Timelapse
+
+**All** opens on the latest frame. Pick a **Day** to show only that calendar day's frames;
+counts, thumbnails and the scrubber follow the filter. Dates and captions use your browser's
+local timezone (shown beside the controls), not the office timezone. A day without recordings
+shows an empty state. Switching days pauses playback and keeps the selected frame if it is
+still in range; otherwise it shows that range's latest frame.
+
+Space plays/pauses and the arrow keys step frames, except while using form controls.
+Only the current frame and next two are warmed for playback; thumbnails remain lazy-loaded.
+Filtering uses the fetched list in memory, with no extra history requests. You can open a day
+with `/timelapse?day=YYYY-MM-DD`; an invalid date falls back to All.
 
 ### Office Messages
 
@@ -615,6 +639,8 @@ The dev password is `devpass`. Run a connector against it with
 bun run lint && bun run typecheck && bun test   # what CI runs first
 bun run test:e2e      # real server + real connector on fixtures + viewer socket
 bun run screenshots   # builds web, real server + simulator, Playwright -> screenshots/
+bun run --filter @agent-office/web build && bun run tools/screenshots/timelapse-smoke.ts
+                      # real-server Chromium regression for day filtering, playback and login
 ```
 
 `bun run screenshots` needs Chromium for Playwright (`bunx playwright install chromium`
