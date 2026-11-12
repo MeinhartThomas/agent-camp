@@ -53,7 +53,9 @@ test("arena API gates feature, identity, office auth, origin, forged fields and 
   expect((await h.post(join, { authorization: "Bearer invalid" }))!.status).toBe(401);
   expect((await h.post(join, { origin: "https://evil.example" }))!.status).toBe(403);
   expect((await h.post({ ...join, personId: "bob" }))!.status).toBe(400);
+  h.advance();
   expect((await h.post({ ...join, prompt: "x".repeat(10000) }))!.status).toBe(413);
+  h.advance();
   expect((await h.post(join))!.status).toBe(200);
   expect(JSON.stringify(h.app.snapshot())).not.toContain("API_PRIVATE_CANARY");
   expect(h.sent.join("\n")).not.toContain("API_PRIVATE_CANARY");
@@ -68,6 +70,32 @@ test("arena API gates feature, identity, office auth, origin, forged fields and 
     new Request("http://office/api/arena/me", { headers: { authorization: "Bearer pw" } }),
   );
   expect(await anon!.json()).toMatchObject({ personId: null, prompt: null });
+});
+test("same office NAT does not share the confirmed-player cooldown", async () => {
+  const h = await setup();
+  const bob = `${ME_COOKIE}=${await makeMeToken("pw", "bob", 1_000_000)}`;
+  const join = { kind: "join", prompt: "private", loadout: "blade" };
+  expect((await h.post(join, { "cf-connecting-ip": "office-NAT" }))!.status).toBe(200);
+  expect((await h.post(join, { "cf-connecting-ip": "office-NAT", cookie: bob }))!.status).toBe(200);
+  expect(
+    (await h.post({ kind: "ready", ready: true }, { "cf-connecting-ip": "different-IP" }))!.status,
+  ).toBe(429);
+  h.advance();
+  expect(
+    (await h.post({ kind: "ready", ready: true }, { "cf-connecting-ip": "office-NAT" }))!.status,
+  ).toBe(200);
+});
+test("history is on-demand and still requires office authentication", async () => {
+  const h = await setup();
+  expect((await h.app.handleHttp(new Request("http://office/api/arena/history")))!.status).toBe(
+    401,
+  );
+  const r = await h.app.handleHttp(
+    new Request("http://office/api/arena/history", { headers: { authorization: "Bearer pw" } }),
+  );
+  expect(await r!.json()).toEqual({ recent: [], leaderboard: [] });
+  expect(h.app.snapshot().data.arena).not.toHaveProperty("recent");
+  expect(h.app.snapshot().data.arena).not.toHaveProperty("leaderboard");
 });
 test("GET arena is public to office spectators but not unauthenticated callers", async () => {
   const h = await setup();

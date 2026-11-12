@@ -103,10 +103,15 @@ export const ArenaState = z.object({
   available: z.boolean(),
   model: z.string().max(100),
   match: ArenaMatch.nullable(),
+  historyRevision: z.number().int().nonnegative().default(0),
+});
+export type ArenaState = z.infer<typeof ArenaState>;
+/** Loaded only when the arena panel requests history; never broadcast with live turns. */
+export const ArenaHistory = z.object({
   leaderboard: z.array(ArenaStanding).max(1000),
   recent: z.array(ArenaMatch).max(20),
 });
-export type ArenaState = z.infer<typeof ArenaState>;
+export type ArenaHistory = z.infer<typeof ArenaHistory>;
 export const ArenaMutation = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("join"),

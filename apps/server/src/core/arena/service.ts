@@ -1,7 +1,8 @@
-/** Authoritative, persisted turn machine. A single KV envelope atomically commits results/budget. */
+/** Live turns stay small; completed matches, standings and budget have separate KV rows. */
 import {
   ARENA_RULES,
   type ArenaAction,
+  type ArenaHistory,
   ArenaMatch,
   ArenaMutation,
   ArenaStanding,
@@ -19,28 +20,43 @@ import {
   type DecisionProvider,
 } from "./provider.ts";
 
-const KEY = "arena.v1";
+const KEY = "arena.v1",
+  BOARD = "arena.board.v2",
+  INDEX = "arena.history.v2",
+  BUDGET = "arena.budget.v2";
+const archiveKey = (id: string) => `arena.match.${id}`;
+export const LOBBY_IDLE_MS = 10 * 60_000,
+  LOBBY_OFFLINE_MS = 2 * 60_000,
+  LOBBY_CHECK_MS = 30_000;
 const Strings = z.record(z.string().max(64), z.string().max(1600));
 const Journal = z
   .array(z.object({ turn: z.number().int(), actions: z.record(z.string(), z.unknown()) }))
   .max(40);
+const Archive = z.object({ match: ArenaMatch, prompts: Strings, journal: Journal.default([]) });
+const Board = z.object({
+  rows: z.array(ArenaStanding).max(1000),
+  applied: z.array(z.string()).max(21),
+});
+const Budget = z.object({
+  day: z.string(),
+  calls: z.number().int().nonnegative(),
+  reservations: z.record(z.string(), z.number().int().nonnegative()),
+});
 const Stored = z.object({
   match: ArenaMatch.nullable(),
   prompts: Strings,
-  recent: z
-    .array(z.object({ match: ArenaMatch, prompts: Strings, journal: Journal.default([]) }))
-    .max(20),
-  leaderboard: z.array(ArenaStanding).max(1000),
-  budget: z.object({
-    day: z.string(),
-    calls: z.number().int().nonnegative(),
-    reservations: z.record(z.string(), z.number().int().nonnegative()),
-  }),
   job: z.string().nullable(),
   failures: z.number().int().nonnegative(),
   journal: Journal,
+  historyRevision: z.number().int().nonnegative().default(0),
+  resultsDone: z.boolean().default(false),
+  lobbyAt: z.number().default(0),
+  hostAt: z.number().default(0),
+  lobbyCheckAt: z.number().default(0),
+  missing: z.record(z.string(), z.number()).default({}),
 });
 type Data = z.infer<typeof Stored>;
+const ended = (m: ArenaMatch | null) => !!m && ["finished", "aborted"].includes(m.phase);
 export class ArenaService {
   readonly enabled: boolean;
   readonly provider: DecisionProvider | null;
@@ -58,31 +74,66 @@ export class ArenaService {
       now?: () => number;
       fetch?: FetchLike;
       provider?: DecisionProvider;
+      online?: () => ReadonlySet<string>;
     },
   ) {
     this.enabled = env.ARENA_ENABLED === "1";
     this.provider = hooks.provider ?? createDecisionProvider(env, hooks.fetch);
     this.budget = new ArenaBudget(env);
     this.now = hooks.now ?? Date.now;
-    const empty: Data = {
+    this.data = {
       match: null,
       prompts: {},
-      recent: [],
-      leaderboard: [],
-      budget: emptyBudget(),
       job: null,
       failures: 0,
       journal: [],
+      historyRevision: 0,
+      resultsDone: true,
+      lobbyAt: 0,
+      hostAt: 0,
+      lobbyCheckAt: 0,
+      missing: {},
     };
     try {
       const raw = store.kvGet(KEY);
-      const parsed = Stored.safeParse(JSON.parse(raw ?? "null"));
-      this.data = parsed.success ? parsed.data : empty;
-      this.storageError = raw !== null && !parsed.success;
+      if (raw !== null) {
+        const value = JSON.parse(raw);
+        this.data = Stored.parse(value);
+        // One-time, retry-safe migration of the pre-review envelope; never read archives on a turn.
+        if (Object.hasOwn(value, "recent")) {
+          const legacy = z
+            .object({
+              recent: z.array(Archive).max(20),
+              leaderboard: z.array(ArenaStanding).max(1000),
+              budget: Budget,
+            })
+            .parse(value);
+          const ids: string[] = [];
+          for (const entry of legacy.recent) {
+            store.kvPut(archiveKey(entry.match.id), JSON.stringify(entry));
+            ids.push(entry.match.id);
+          }
+          store.kvPut(INDEX, JSON.stringify(ids));
+          store.kvPut(BUDGET, JSON.stringify(legacy.budget));
+          store.kvPut(
+            BOARD,
+            JSON.stringify({
+              rows: legacy.leaderboard,
+              applied: this.data.match?.phase === "finished" ? [this.data.match.id] : [],
+            }),
+          );
+          this.data.lobbyAt = this.now();
+          this.data.lobbyCheckAt = this.now();
+          store.kvPut(KEY, JSON.stringify(this.data));
+        }
+      }
     } catch {
-      this.data = empty;
       this.storageError = true;
     }
+  }
+  private read<S extends z.ZodType>(key: string, schema: S, fallback: z.infer<S>): z.infer<S> {
+    const raw = this.store.kvGet(key);
+    return raw === null ? fallback : schema.parse(JSON.parse(raw));
   }
   state(): ArenaState {
     return structuredClone({
@@ -90,15 +141,33 @@ export class ArenaService {
       available: this.enabled && !!this.provider && !this.storageError,
       model: this.provider?.model ?? "not configured",
       match: this.enabled ? this.data.match : null,
-      leaderboard: this.enabled ? this.data.leaderboard : [],
-      recent: this.enabled ? this.data.recent.map((r) => r.match) : [],
+      historyRevision: this.data.historyRevision,
+    });
+  }
+  history(): ArenaHistory {
+    if (!this.enabled || this.storageError) return { recent: [], leaderboard: [] };
+    if (this.completeResults()) this.hooks.publish(this.state());
+    const ids = this.read(INDEX, z.array(z.string()).max(21), []);
+    const recent = ids
+      .filter((id) => id !== this.data.match?.id)
+      .slice(0, 20)
+      .flatMap((id) => {
+        const entry = this.read(archiveKey(id), Archive.nullable(), null);
+        return entry ? [entry.match] : [];
+      });
+    return structuredClone({
+      recent,
+      leaderboard: this.read(BOARD, Board, { rows: [], applied: [] }).rows,
     });
   }
   ownPrompt(personId: string): string | null {
     return Object.hasOwn(this.data.prompts, personId) ? this.data.prompts[personId]! : null;
   }
   deadline(): number | null {
-    return this.enabled ? (this.data.match?.deadline ?? null) : null;
+    if (!this.enabled || this.storageError) return null;
+    return this.data.match?.phase === "lobby"
+      ? Math.min(this.data.lobbyAt + LOBBY_IDLE_MS, this.data.lobbyCheckAt + LOBBY_CHECK_MS)
+      : (this.data.match?.deadline ?? null);
   }
   private commit(): void {
     this.store.kvPut(KEY, JSON.stringify(this.data));
@@ -106,16 +175,49 @@ export class ArenaService {
     const at = this.deadline();
     if (at !== null) this.hooks.schedule(at);
   }
-  private lobby(hostId: string): void {
-    const previous = this.data.match;
-    if (previous) {
-      this.data.recent.unshift({
-        match: previous,
-        prompts: this.data.prompts,
-        journal: this.data.journal,
-      });
-      this.data.recent = this.data.recent.slice(0, 20);
+  /** Durable finished state is the recovery source. Each projection is idempotent. */
+  private completeResults(): boolean {
+    const m = this.data.match;
+    if (!ended(m) || !m || this.data.resultsDone) return false;
+    const board = this.read(BOARD, Board, { rows: [], applied: [] });
+    if (m.phase === "finished" && !board.applied.includes(m.id)) {
+      for (const f of m.fighters) {
+        let row = board.rows.find((r) => r.personId === f.personId);
+        if (!row) {
+          row = { personId: f.personId, name: f.name, wins: 0, knockouts: 0, matches: 0 };
+          board.rows.push(row);
+        }
+        row.name = f.name;
+        row.matches++;
+        row.knockouts += f.knockouts;
+        if (m.winners.includes(f.personId)) row.wins++;
+      }
+      board.rows.sort(
+        (a, b) =>
+          b.wins - a.wins || b.knockouts - a.knockouts || a.personId.localeCompare(b.personId),
+      );
+      board.applied = [m.id, ...board.applied].slice(0, 21);
+      this.store.kvPut(BOARD, JSON.stringify(board));
     }
+    this.store.kvPut(
+      archiveKey(m.id),
+      JSON.stringify({ match: m, prompts: this.data.prompts, journal: this.data.journal }),
+    );
+    const ids = [
+      m.id,
+      ...this.read(INDEX, z.array(z.string()).max(21), []).filter((id) => id !== m.id),
+    ];
+    for (const id of ids.slice(21)) this.store.kvDelete(archiveKey(id));
+    this.store.kvPut(INDEX, JSON.stringify(ids.slice(0, 21)));
+    this.data.resultsDone = true;
+    this.store.kvPut(KEY, JSON.stringify(this.data));
+    return true;
+  }
+  private lobby(hostId: string): void {
+    this.completeResults();
+    const retained = this.read(INDEX, z.array(z.string()).max(21), []);
+    for (const id of retained.slice(20)) this.store.kvDelete(archiveKey(id));
+    if (retained.length > 20) this.store.kvPut(INDEX, JSON.stringify(retained.slice(0, 20)));
     this.data.match = {
       id: crypto.randomUUID(),
       hostId,
@@ -136,6 +238,47 @@ export class ArenaService {
     this.data.job = null;
     this.data.failures = 0;
     this.data.journal = [];
+    this.data.resultsDone = true;
+    this.data.lobbyAt = this.data.lobbyCheckAt = this.data.hostAt = this.now();
+    this.data.missing = {};
+    this.data.historyRevision++;
+  }
+  private maintainLobby(): void {
+    const m = this.data.match;
+    if (m?.phase !== "lobby") return;
+    const now = this.now();
+    this.data.lobbyCheckAt = now;
+    if (now - this.data.lobbyAt >= LOBBY_IDLE_MS) {
+      this.data.match = null;
+      this.data.prompts = {};
+      this.data.missing = {};
+      return;
+    }
+    const online = this.hooks.online?.() ?? new Set(m.fighters.map((f) => f.personId));
+    for (const f of m.fighters) {
+      if (online.has(f.personId)) delete this.data.missing[f.personId];
+      else if (!Object.hasOwn(this.data.missing, f.personId)) this.data.missing[f.personId] = now;
+    }
+    m.fighters = m.fighters.filter((f) => {
+      if (online.has(f.personId) || now - this.data.missing[f.personId]! < LOBBY_OFFLINE_MS)
+        return true;
+      delete this.data.prompts[f.personId];
+      delete this.data.missing[f.personId];
+      return false;
+    });
+    if (!online.has(m.hostId) || now - this.data.hostAt >= LOBBY_OFFLINE_MS) {
+      const successor = m.fighters.find((f) => f.personId !== m.hostId && online.has(f.personId));
+      if (successor) {
+        m.hostId = successor.personId;
+        this.data.hostAt = now;
+      }
+    }
+    if (
+      m.fighters.length === 0 &&
+      Object.keys(this.data.prompts).length === 0 &&
+      now - this.data.lobbyAt >= LOBBY_OFFLINE_MS
+    )
+      this.data.match = null;
   }
   mutate(
     input: unknown,
@@ -149,26 +292,28 @@ export class ArenaService {
     const parsed = ArenaMutation.safeParse(input);
     if (!parsed.success) return fail(400, "Invalid arena action");
     const a = parsed.data;
+    this.maintainLobby();
     let m = this.data.match;
     if (a.kind === "reveal") {
+      const current = m?.id === a.matchId;
       const entry =
-        m?.id === a.matchId
-          ? { match: m, prompts: this.data.prompts }
-          : this.data.recent.find((r) => r.match.id === a.matchId);
-      if (!entry || !["finished", "aborted"].includes(entry.match.phase))
+        current && m
+          ? { match: m, prompts: this.data.prompts, journal: this.data.journal }
+          : this.read(archiveKey(a.matchId), Archive.nullable(), null);
+      const ids = this.read(INDEX, z.array(z.string()).max(21), []);
+      if (!entry || !ended(entry.match) || (!current && !ids.includes(a.matchId)))
         return fail(409, "That match is not finished");
       if (!Object.hasOwn(entry.prompts, personId))
         return fail(403, "Only a participant can reveal their own tactics");
       entry.match.revealedPrompts[personId] = entry.prompts[personId]!;
+      this.store.kvPut(archiveKey(a.matchId), JSON.stringify(entry));
+      this.data.historyRevision++;
       this.commit();
       return { status: 200, body: this.state() };
     }
     if (!person) return fail(409, "Connect your coding agent to enter the arena");
     if (a.kind === "rematch") {
-      if (!m || !["finished", "aborted"].includes(m.phase))
-        return fail(409, "Finish the current match first");
-      if (!m.fighters.some((f) => f.personId === personId))
-        return fail(403, "Only participants can open a rematch");
+      if (!ended(m)) return fail(409, "Finish the current match first");
       this.lobby(personId);
       this.commit();
       return { status: 200, body: this.state() };
@@ -214,8 +359,9 @@ export class ArenaService {
       if (!fighter) return fail(409, "You have not joined");
       m.fighters = m.fighters.filter((f) => f.personId !== personId);
       delete this.data.prompts[personId];
+      delete this.data.missing[personId];
       if (m.hostId === personId) m.hostId = m.fighters[0]?.personId ?? personId;
-      if (m.fighters.length === 0) this.data.match = null;
+      if (!m.fighters.length) this.data.match = null;
     } else if (a.kind === "ready") {
       if (!fighter) return fail(403, "Join before readying");
       fighter.ready = a.ready;
@@ -224,34 +370,53 @@ export class ArenaService {
       if (m.fighters.length < 2 || !m.fighters.every((f) => f.ready))
         return fail(409, "Need 2–8 ready fighters");
       if (!this.provider) return fail(503, "Arena model is not configured");
-      const newcomers = m.fighters.filter(
-        (f) => !this.data.leaderboard.some((r) => r.personId === f.personId),
-      );
-      if (this.data.leaderboard.length + newcomers.length > 1000)
+      const board = this.read(BOARD, Board, { rows: [], applied: [] }).rows;
+      if (
+        board.length +
+          m.fighters.filter((f) => !board.some((r) => r.personId === f.personId)).length >
+        1000
+      )
         return fail(409, "Arena leaderboard is full");
-      const reserved = this.budget.reserve(this.data.budget, m.id, m.fighters.length, this.now());
+      const reserved = this.budget.reserve(
+        this.read(BUDGET, Budget, emptyBudget()),
+        m.id,
+        m.fighters.length,
+        this.now(),
+      );
       if (!reserved) return fail(429, "Arena match or daily inference budget exhausted");
-      this.data.budget = reserved;
+      this.store.kvPut(BUDGET, JSON.stringify(reserved));
       this.data.match = prepare(m);
       m = this.data.match;
       m.phase = "countdown";
       m.startedAt = this.now();
       m.deadline = this.now() + ARENA_RULES.countdownMs;
     }
+    if (this.data.match?.hostId === personId) this.data.hostAt = this.now();
     this.commit();
     return { status: 200, body: this.state() };
   }
-  /** Called by alarms AND restore. Never reruns a persisted paid decision job. */
+  /** Called by alarms and restore; in-flight paid jobs are never repeated. */
   tick(): void {
     if (!this.enabled || this.storageError) return;
+    if (this.completeResults()) this.hooks.publish(this.state());
     const m = this.data.match;
-    if (!m || m.deadline === null) return;
+    if (!m) return;
+    if (m.phase === "lobby") {
+      const due = this.deadline()!;
+      if (due > this.now()) {
+        this.hooks.schedule(due);
+        return;
+      }
+      this.maintainLobby();
+      this.commit();
+      return;
+    }
+    if (m.deadline === null) return;
     if (m.deadline > this.now()) {
       this.hooks.schedule(m.deadline);
       return;
     }
     if (m.phase === "deciding") {
-      // A crashed/stalled job uses defense. Its callbacks are invalidated by settle().
       this.settle(m.id, this.data.job, {});
       return;
     }
@@ -264,9 +429,9 @@ export class ArenaService {
     m.deadline = this.now() + ARENA_RULES.decisionMs + 250;
     const job = crypto.randomUUID();
     this.data.job = job;
-    const id = m.id;
-    const snapshot = structuredClone(m);
-    const provider = this.provider;
+    const id = m.id,
+      snapshot = structuredClone(m),
+      provider = this.provider;
     this.commit();
     const p = Promise.all(
       snapshot.fighters
@@ -295,7 +460,6 @@ export class ArenaService {
   ): void {
     const m = this.data.match;
     if (!m || m.id !== id || m.phase !== "deciding" || this.data.job !== job) return;
-    // Validate the persisted lease too: a recovered instance may have completed this job.
     const persisted = JSON.parse(this.store.kvGet(KEY) ?? "null") as Data | null;
     if (
       persisted?.job !== job ||
@@ -304,8 +468,7 @@ export class ArenaService {
     )
       return;
     this.data.job = null;
-    const valid = Object.values(actions).some(Boolean);
-    this.data.failures = valid ? 0 : this.data.failures + 1;
+    this.data.failures = Object.values(actions).some(Boolean) ? 0 : this.data.failures + 1;
     if (this.data.failures >= 3) {
       this.finish("aborted", "Model unavailable for three consecutive turns");
       return;
@@ -327,22 +490,11 @@ export class ArenaService {
     m.endedAt = this.now();
     if (reason) m.reason = reason;
     this.data.job = null;
-    if (phase === "finished")
-      for (const f of m.fighters) {
-        let row = this.data.leaderboard.find((r) => r.personId === f.personId);
-        if (!row) {
-          row = { personId: f.personId, name: f.name, wins: 0, knockouts: 0, matches: 0 };
-          this.data.leaderboard.push(row);
-        }
-        row.name = f.name;
-        row.matches++;
-        row.knockouts += f.knockouts;
-        if (m.winners.includes(f.personId)) row.wins++;
-      }
-    this.data.leaderboard.sort(
-      (a, b) =>
-        b.wins - a.wins || b.knockouts - a.knockouts || a.personId.localeCompare(b.personId),
-    );
+    this.data.resultsDone = false;
+    this.data.historyRevision++;
+    // Persist outcome before projecting results. Recovery retries projections, not the fight.
+    this.store.kvPut(KEY, JSON.stringify(this.data));
+    this.completeResults();
     this.commit();
   }
 }

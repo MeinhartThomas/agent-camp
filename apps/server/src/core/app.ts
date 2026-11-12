@@ -202,6 +202,13 @@ export class OfficeApp {
         transport.waitUntil?.(p);
       },
       now: () => this.now(),
+      online: () =>
+        new Set(
+          this.hub
+            .state()
+            .people.filter((p) => this.hub.liveSocketsOf(p.personId, this.now()).length > 0)
+            .map((p) => p.personId),
+        ),
       ...(opts.fetch ? { fetch: opts.fetch } : {}),
     });
     const log = opts.log ?? ((l: string) => console.log(l));
@@ -552,6 +559,12 @@ export class OfficeApp {
       const personId = await meFromRequest(req, this.env, this.now());
       return json({ personId, prompt: personId ? this.arena.ownPrompt(personId) : null });
     }
+    if (path === "/api/arena/history" && method === "GET") {
+      if (!this.arena.enabled) return json({ error: "Arena is disabled" }, { status: 404 });
+      if (!(await isAuthorized(req, this.env, this.now())))
+        return json({ error: "unauthorized" }, { status: 401 });
+      return json(this.arena.history());
+    }
     if (path === "/api/arena") {
       if (!this.arena.enabled) return json({ error: "Arena is disabled" }, { status: 404 });
       if (!(await isAuthorized(req, this.env, this.now())))
@@ -561,16 +574,10 @@ export class OfficeApp {
       const origin = req.headers.get("origin");
       if ((origin && origin !== url.origin) || req.headers.get("sec-fetch-site") === "cross-site")
         return json({ error: "cross-origin mutation denied" }, { status: 403 });
-      const who = (
-        req.headers.get("cf-connecting-ip") ??
-        req.headers.get("x-forwarded-for") ??
-        "-"
-      ).slice(0, 128);
-      if (!this.arenaRequests.allow(who, this.now()))
-        return json({ error: "slow down" }, { status: 429, headers: { "retry-after": "1" } });
       const me = await meFromRequest(req, this.env, this.now());
-      if (!me)
-        return json({ error: "Confirm your identity using your nameplate first" }, { status: 403 });
+      if (!me) return json({ error: "Confirm who you are in the Me menu first" }, { status: 403 });
+      if (!this.arenaRequests.allow(me, this.now()))
+        return json({ error: "slow down" }, { status: 429, headers: { "retry-after": "1" } });
       const body = await readPartyBody(req);
       if (body.status) return json({ error: "Invalid or oversized JSON" }, { status: body.status });
       const person = this.hub

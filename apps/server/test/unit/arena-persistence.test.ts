@@ -29,9 +29,9 @@ test("SQLite preserves private tactics separately from public snapshots and reve
   b.mutate({ kind: "rematch" }, "anna", person);
   expect(JSON.stringify(b.state())).not.toContain("PRIVATE_SQL_CANARY");
   b.mutate({ kind: "reveal", matchId: id }, "anna", undefined);
-  expect(b.state().recent[0]!.revealedPrompts.anna).toBe("PRIVATE_SQL_CANARY");
+  expect(b.history().recent[0]!.revealedPrompts.anna).toBe("PRIVATE_SQL_CANARY");
   b.mutate({ kind: "join", prompt: "FUTURE_PRIVATE", loadout: "blade" }, "anna", person);
-  expect(b.state().recent[0]!.revealedPrompts.anna).toBe("PRIVATE_SQL_CANARY");
+  expect(b.history().recent[0]!.revealedPrompts.anna).toBe("PRIVATE_SQL_CANARY");
   expect(JSON.stringify(b.state())).not.toContain("FUTURE_PRIVATE");
   db.close();
 });

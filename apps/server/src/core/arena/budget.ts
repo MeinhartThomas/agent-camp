@@ -50,4 +50,4 @@ export class ArenaRateLimit {
   }
 }
 // Store imported as a type here so budgets can later use the same atomic envelope as matches.
-export type ArenaStore = Pick<Store, "kvGet" | "kvPut">;
+export type ArenaStore = Pick<Store, "kvGet" | "kvPut" | "kvDelete">;

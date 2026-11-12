@@ -1,5 +1,6 @@
 import {
   ARENA_LOADOUTS,
+  ArenaHistory,
   type ArenaLoadout,
   type ArenaMatch,
   type ArenaMutation,
@@ -41,6 +42,9 @@ export class ArenaPanel {
   private me: string | null = null;
   private busy = false;
   private generation = 0;
+  private history: ArenaHistory = { recent: [], leaderboard: [] };
+  private historyRevision = -1;
+  private historyLoading = false;
   private timer: ReturnType<typeof setInterval> | undefined;
   constructor(
     host: HTMLElement,
@@ -151,6 +155,7 @@ export class ArenaPanel {
   open(): void {
     if (!this.model.arena?.enabled) return;
     this.panel.hidden = false;
+    this.historyRevision = -1;
     this.panel.focus();
     this.refresh();
     if (!this.timer) this.timer = setInterval(() => this.updateInfo(), 250);
@@ -188,6 +193,22 @@ export class ArenaPanel {
       : 0;
     this.info.textContent = `${state.model} · ${m ? `${m.phase.toUpperCase()} · turn ${m.turn}/40${m.deadline ? ` · ${seconds}s` : ""}` : "NO MATCH"} · ${this.me ? `Playing as ${this.model.people.get(this.me)?.name ?? this.me}` : "Spectator — confirm who you are in the Me menu to play"}${!state.available ? " · Model unavailable" : ""}`;
   }
+  private async loadHistory(revision: number): Promise<void> {
+    this.historyLoading = true;
+    this.historyRevision = revision;
+    try {
+      const q = this.options.key ? `?key=${encodeURIComponent(this.options.key)}` : "";
+      const r = await fetch(`/api/arena/history${q}`);
+      if (r.status === 401) void loginIfLoggedOut();
+      if (!r.ok) throw new Error("Could not load arena history");
+      this.history = ArenaHistory.parse(await r.json());
+    } catch {
+      this.notice.textContent = "Could not load results. Reopen to retry.";
+    } finally {
+      this.historyLoading = false;
+      this.refresh();
+    }
+  }
   refresh(): void {
     const state = this.model.arena;
     this.launch.hidden = !state?.enabled;
@@ -198,6 +219,8 @@ export class ArenaPanel {
       return;
     }
     if (!this.isOpen) return;
+    if (!this.historyLoading && this.historyRevision !== state.historyRevision)
+      void this.loadHistory(state.historyRevision);
     this.updateInfo();
     this.claim.hidden = !!this.me || !this.options.claim;
     const m = state.match;
@@ -230,7 +253,7 @@ export class ArenaPanel {
     }
     if (m?.phase === "countdown" && this.me === m.hostId)
       add("Cancel countdown", { kind: "cancel" });
-    if (m && ["finished", "aborted"].includes(m.phase) && own)
+    if (m && ["finished", "aborted"].includes(m.phase) && this.me)
       add("Open rematch lobby", { kind: "rematch" });
     this.feed.replaceChildren();
     for (const e of m?.events ?? []) {
@@ -244,7 +267,7 @@ export class ArenaPanel {
       );
     }
     this.results.replaceChildren();
-    for (const match of [m, ...state.recent].filter(
+    for (const match of [m, ...this.history.recent.filter((match) => match.id !== m?.id)].filter(
       (m): m is ArenaMatch => !!m && ["finished", "aborted"].includes(m.phase),
     )) {
       const section = el("details");
@@ -291,7 +314,7 @@ export class ArenaPanel {
       this.results.append(section);
     }
     this.board.replaceChildren();
-    for (const r of state.leaderboard.slice(0, 50))
+    for (const r of this.history.leaderboard.slice(0, 50))
       this.board.append(el("li", `${r.name} · ${r.wins} / ${r.knockouts} / ${r.matches}`));
   }
   private async send(action: ArenaMutation): Promise<void> {

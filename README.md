@@ -271,13 +271,15 @@ curl -X PUT https://<office>/api/people/<personId>/gif \
 ### Prompt Arena (optional)
 
 The office can host a live **2–8 player prompt-driven arena**. Open **Prompt Arena** or click
-its south-map entrance. Confirm your identity on your office nameplate, write private tactics,
+its south-map entrance. Confirm your identity in the top-bar Me menu, write private tactics,
 choose Blade/Bow/Guardian, and ready up. The host starts once everyone is ready. The same
 server-selected LLM chooses each fighter’s moves; a deterministic engine resolves simultaneous
 turns. Two fighters is a duel; larger matches are free-for-all, last fighter standing.
 
 Anyone in the office can spectate. Matches include shields/healing/boost pickups, shrinking
-arena pressure, a results board, wins/knockout rankings, and rematches. Tactics stay private;
+arena pressure, a results board, wins/knockout rankings, and rematches. Any connected claimed person can open
+a fresh lobby after a match. Offline or inactive hosts hand over; lobbies expire after ten
+minutes. Results and rankings load only when requested by the panel, never in turn broadcasts. Tactics stay private;
 after a match you may explicitly reveal only your own frozen prompt for that match.
 **Unlike connector telemetry, these deliberately entered tactics are sent to the configured
 AI provider and stored server-side. Never put secrets or customer information in them.**

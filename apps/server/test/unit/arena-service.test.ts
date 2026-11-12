@@ -95,16 +95,17 @@ describe("arena orchestration", () => {
     for (let i = 0; i < 50 && h.service.deadline() !== null; i++) await h.advance();
     const state = h.service.state();
     expect(state.match?.phase).toBe("finished");
-    expect(state.leaderboard.every((r) => r.matches === 1)).toBe(true);
+    const history = h.service.history();
+    expect(history.leaderboard.every((r) => r.matches === 1)).toBe(true);
     h.restore();
     await h.advance();
-    expect(h.service.state().leaderboard).toEqual(state.leaderboard);
+    expect(h.service.history().leaderboard).toEqual(history.leaderboard);
     expect(h.mutate({ kind: "reveal", matchId: state.match!.id }, "outsider").status).toBe(403);
     expect(h.mutate({ kind: "reveal", matchId: state.match!.id }).status).toBe(200);
     expect(h.service.state().match!.revealedPrompts).toEqual({ a: "PRIVATE_a" });
     h.mutate({ kind: "rematch" });
     expect(h.service.state().match!.fighters).toHaveLength(0);
-    expect(h.service.state().recent[0]!.revealedPrompts).toEqual({ a: "PRIVATE_a" });
+    expect(h.service.history().recent[0]!.revealedPrompts).toEqual({ a: "PRIVATE_a" });
   });
   test("persistent provider failure aborts without leaderboard credit", async () => {
     const h = harness({
@@ -117,7 +118,7 @@ describe("arena orchestration", () => {
     h.mutate({ kind: "start" });
     for (let i = 0; i < 4; i++) await h.advance();
     expect(h.service.state().match?.phase).toBe("aborted");
-    expect(h.service.state().leaderboard).toEqual([]);
+    expect(h.service.history().leaderboard).toEqual([]);
     expect(JSON.stringify(h.frames)).not.toContain("SECRET");
   });
   test("disabled service never exposes stored arena state", () => {

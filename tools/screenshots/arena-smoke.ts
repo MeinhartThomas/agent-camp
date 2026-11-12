@@ -161,6 +161,7 @@ let browser: Browser | undefined;
 const errors: string[] = [];
 const frames: string[] = [];
 const pages: Page[] = [];
+let hostHistoryRequests = 0;
 try {
   browser = await chromium.launch({
     headless: true,
@@ -192,6 +193,10 @@ try {
     ]);
     const page = await context.newPage();
     pages.push(page);
+    if (i === 0)
+      page.on("request", (request) => {
+        if (new URL(request.url()).pathname === "/api/arena/history") hostHistoryRequests++;
+      });
     page.on("pageerror", (e) => errors.push(e.stack ?? e.message));
     if (i === 8)
       page.on("websocket", (ws) =>
@@ -239,9 +244,12 @@ try {
     const res = await fetch(`${base}/__test/tick`);
     return (await res.json()) as ArenaState;
   };
+  const historyBeforeTurn = hostHistoryRequests;
   let state = await tick();
   assert.equal(state.match?.turn, 1);
   assert.equal(calls, 8);
+  await host.waitForFunction(() => window.__office.model.arena?.match?.turn === 1);
+  assert.equal(hostHistoryRequests, historyBeforeTurn, "live turns must not refetch history");
   console.log("arena smoke: first turn resolved");
   await spectator.waitForFunction(() => window.__office.model.arena?.match?.turn === 1);
   // A fresh spectator joins mid-match using a phone viewport; no mutation rights.
@@ -266,8 +274,9 @@ try {
     state = await tick();
   console.log(`arena smoke: phase=${state.match?.phase}, turn=${state.match?.turn}`);
   assert.equal(state.match?.phase, "finished");
-  assert(state.leaderboard.every((r) => r.matches === 1));
-  assert.equal(state.leaderboard.length, 8);
+  const history = app.arena.history();
+  assert(history.leaderboard.every((r) => r.matches === 1));
+  assert.equal(history.leaderboard.length, 8);
   await host.waitForFunction(() => window.__office.model.arena?.match?.phase === "finished");
   assert(!frames.join("\n").includes("TACTICS_PRIVATE_"));
   host.once("dialog", (dialog) => dialog.accept());

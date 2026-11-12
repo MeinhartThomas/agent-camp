@@ -174,7 +174,7 @@ export class Camera {
     const s = this.screen();
     const fit = Math.min(
       s.width / (a.w * TILE + 64),
-      (s.height - this.inset()) / (a.h * TILE + 64),
+      (s.height - (name === "arena" ? this.inset() : 0)) / (a.h * TILE + 64),
     );
     // The whole combat grid must remain visible on phones, not just a cropped close-up.
     const zoom = name === "arena" ? Math.min(4, fit) : Math.max(2, Math.min(4, Math.floor(fit)));

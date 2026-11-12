@@ -7,8 +7,7 @@ const state = ArenaState.parse({
   available: true,
   model: "fake",
   match: null,
-  recent: [],
-  leaderboard: [],
+  historyRevision: 0,
 });
 test("arena socket state updates without altering office identity or seating", () => {
   const model = new OfficeModel();
