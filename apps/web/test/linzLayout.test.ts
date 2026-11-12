@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import type { Container } from "pixi.js";
 import { paintLinz } from "../src/art/linz.ts";
 import { C } from "../src/art/palette.ts";
 import { PixelCanvas, packColor } from "../src/art/pixel.ts";
 import { artSeason, setArtSeason } from "../src/art/seasons.ts";
+import { Camera } from "../src/camera.ts";
 import {
   LINZ_SURROUND,
   type LinzRect,
@@ -10,7 +12,7 @@ import {
   linzTreeAllowed,
   overlapsLinzRect,
 } from "../src/world/linzLayout.ts";
-import { buildOfficeMap, TILE } from "../src/world/map.ts";
+import { buildOfficeMap, OFFICE_COLS, TILE } from "../src/world/map.ts";
 
 const contains = (outer: LinzRect, inner: LinzRect) =>
   inner.x >= outer.x &&
@@ -44,9 +46,12 @@ describe("linzLayout", () => {
         expect(height + lane).toBeGreaterThan(l.road.y);
         expect(height + lane).toBeLessThan(l.road.y + l.road.h);
       }
-      expect(contains(l.strips[2]!, l.forest)).toBe(true);
-      expect(overlapsLinzRect(l.forest, l.north)).toBe(false);
-      expect(overlapsLinzRect(l.forest, l.road)).toBe(false);
+      expect(l.nightlife).toEqual(linzLayout(1280, 480).nightlife);
+      for (const region of Object.values(l.nightlife)) {
+        expect(contains(l.nearBank, region)).toBe(true);
+        for (const obstacle of [l.river, l.lentos, l.facades, l.road, ...l.benches])
+          expect(overlapsLinzRect(region, obstacle)).toBe(false);
+      }
       expect(l.north).toEqual(linzLayout(1280, 480).north);
     });
   }
@@ -66,6 +71,52 @@ describe("linzLayout", () => {
     expect(l.river.w).toBe(l.north.w);
   });
 
+  test("night eyes and the entire wolf sprite stay inside their reserved regions", () => {
+    const { eyeVegetation: eyes, wolfPromenade: wolf } = linzLayout(1280, 480).nightlife;
+    expect(overlapsLinzRect(eyes, wolf)).toBe(false);
+    // Runtime eyes are 7×3 at scale 2, with a centred anchor; wolf is 20×16, foot anchored.
+    for (const fraction of [0, 0.25, 0.5, 0.75, 1]) {
+      const eyeX = Math.round(eyes.x + 7 + fraction * (eyes.w - 14));
+      const eyeY = Math.round(eyes.y + 5 + fraction * (eyes.h - 10));
+      expect(contains(eyes, { x: eyeX - 7, y: eyeY - 3, w: 14, h: 6 })).toBe(true);
+      const wolfX = wolf.x + 10 + fraction * (wolf.w - 20);
+      const wolfY = wolf.y + wolf.h - 2;
+      expect(contains(wolf, { x: wolfX - 10, y: wolfY - 16, w: 20, h: 16 })).toBe(true);
+    }
+  });
+
+  for (const [name, width, height, kiosk] of [
+    ["laptop", 1440, 900, false],
+    ["1080p", 1920, 1080, false],
+    ["wall kiosk", 1920, 1080, true],
+    ["iPad kiosk", 1180, 820, true],
+  ] as const) {
+    test(`nightlife stays visible under the HUD at unchanged ${name} office fit`, () => {
+      const map = buildOfficeMap();
+      const world = { scale: { set() {} }, position: { set() {} } } as unknown as Container;
+      const topInset = kiosk ? 46 : 36;
+      const cam = new Camera(
+        world,
+        () => ({ width, height }),
+        () => ({ width: map.width * TILE, height: map.height * TILE }),
+        () => map.areas,
+        { kiosk, holdAuto: !kiosk, topInset, view: "overview" },
+      );
+      cam.fitWidth = () => OFFICE_COLS * TILE;
+      cam.zoomToFit(true);
+      const topLeft = cam.screenToWorld(0, topInset);
+      const bottomRight = cam.screenToWorld(width, height);
+      const visible = {
+        ...topLeft,
+        w: bottomRight.x - topLeft.x,
+        h: bottomRight.y - topLeft.y,
+      };
+      for (const region of Object.values(linzLayout(1280, 480).nightlife))
+        expect(contains(visible, region)).toBe(true);
+      expect(cam.zoom * TILE).toBeCloseTo((width / (OFFICE_COLS * TILE)) * TILE, 5);
+    });
+  }
+
   test("complete tree crowns/shadows cannot intrude into the riverfront", () => {
     const l = linzLayout(1280, 480);
     for (let y = -192; y < 20; y += 4)
@@ -77,7 +128,7 @@ describe("linzLayout", () => {
 });
 
 describe("paintLinz", () => {
-  test("seasonal hill foliage changes without recolouring the river or architecture", () => {
+  test("seasonal hill and riverfront vegetation leave river and architecture unchanged", () => {
     const previous = artSeason();
     const l = linzLayout(1280, 480);
     const sheets: PixelCanvas[] = [];
@@ -89,11 +140,15 @@ describe("paintLinz", () => {
         sheets.push(pc);
       }
       const summer = sheets[0]!;
-      for (const sheet of sheets.slice(1)) {
-        expect(sheet.data.subarray(60 * sheet.width)).toEqual(
-          summer.data.subarray(60 * summer.width),
-        );
-      }
+      const pixels = (sheet: PixelCanvas, rect: LinzRect) => {
+        const result: number[] = [];
+        for (let y = rect.y; y < rect.y + rect.h; y++)
+          for (let x = rect.x; x < rect.x + rect.w; x++) result.push(sheet.get(x, y));
+        return result;
+      };
+      for (const sheet of sheets.slice(1))
+        for (const rect of [l.river, l.aec, l.lentos, l.facades])
+          expect(pixels(sheet, rect)).toEqual(pixels(summer, rect));
       for (const sheet of sheets.slice(1, 3)) expect(sheet.data).not.toEqual(summer.data);
     } finally {
       setArtSeason(previous);

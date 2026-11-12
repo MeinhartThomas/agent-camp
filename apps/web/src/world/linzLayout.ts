@@ -28,8 +28,13 @@ export function linzLayout(width: number, height: number) {
     facades: { x: 752, y: -54, w: 184, h: 46 },
     sidewalk: { x: -m, y: height, w: width + 2 * m, h: 10 },
     road: { x: -m, y: height + 10, w: width + 2 * m, h: 44 },
-    // A wooded west-side clearing, safely away from both riverfront and southern traffic.
-    forest: { x: -168, y: 50, w: 128, h: height - 100 },
+    // Keep night life in the shallow north band visible at the unchanged office/kiosk fit.
+    // These full sprite/vegetation bounds clear the river, buildings, benches and office.
+    nightlife: {
+      wolfPromenade: { x: 64, y: -30, w: 128, h: 22 },
+      eyeVegetation: { x: 272, y: -30, w: 132, h: 20 },
+    },
+    benches: [36, 212, 450, 712, 1004, 1180].map((x) => ({ x, y: -30, w: 18, h: 11 })),
     treeExclusions: [north],
   };
 }

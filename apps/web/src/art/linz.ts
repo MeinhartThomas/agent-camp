@@ -120,8 +120,21 @@ export function paintLinz(pc: PixelCanvas, l: LinzLayout): void {
       pc.rect(wx, -16, 4, 7, C.dusk);
     }
   }
+  // A low planted bed shelters the existing night eyes inside the normal fit view.
+  const v = l.nightlife.eyeVegetation;
+  pc.rect(v.x, v.y + 13, v.w, 7, C.cocoa);
+  const shrubs = foliage(1);
+  for (let i = 0; i < 6; i++) {
+    const x = v.x + 2 + i * 21;
+    const y = v.y + 2 + (i % 2);
+    pc.ellipse(x, y, 22, 15, C.pine);
+    pc.ellipse(x + 1, y, 19, 12, shrubs?.dark ?? C.forest);
+    pc.hline(x + 5, y + 2, 9, shrubs?.mid ?? C.moss);
+  }
+  pc.hline(v.x, v.y + v.h - 1, v.w, C.slate);
+
   // A few quiet benches and bollards unify the promenade, no new POIs.
-  for (const x of [36, 212, 450, 712, 1004, 1180]) {
+  for (const { x } of l.benches) {
     pc.rect(x, -30, 18, 3, C.cocoa);
     pc.rect(x, -24, 18, 2, C.bark);
     pc.vline(x + 2, -22, 3, C.dusk);
