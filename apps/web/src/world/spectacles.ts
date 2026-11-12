@@ -15,7 +15,7 @@ import {
   paintThrone,
 } from "../art/spectacles.ts";
 import type { OfficeModel } from "../state/officeModel.ts";
-import type { CharacterManager, SessionCharacter } from "./characters.ts";
+import { type CharacterManager, FIRE_AT, type SessionCharacter } from "./characters.ts";
 import type { Effects } from "./effects.ts";
 import { localDayKey } from "./lifeRules.ts";
 import { localHour } from "./living.ts";
@@ -24,6 +24,7 @@ import type { OfficeScene } from "./office.ts";
 import {
   abductionPose,
   angleToward,
+  canJoinSpectacle,
   congaRoute,
   hardestWorker,
   routeLength,
@@ -168,7 +169,7 @@ export class OfficeSpectacles {
       !c.removed &&
       !c.sprite.destroyed &&
       !!s &&
-      !s.offline &&
+      canJoinSpectacle(s, FIRE_AT) &&
       !c.evac &&
       !["queued", "zapped", "waving", "leaving", "carried"].includes(c.mode)
     );
@@ -290,6 +291,7 @@ export class OfficeSpectacles {
       active: this.event?.kind ?? null,
       age: this.event?.age ?? 0,
       participants: this.proxies.size,
+      sessionIds: [...this.proxies.keys()],
       duck: { x: this.duck.x, y: this.duck.y, angle: this.duckAngle, quacking: this.quackT > 0 },
       throne: { x: this.throne.x, y: this.throne.y, guards: this.guards.length },
       reducedMotion: this.reduced,

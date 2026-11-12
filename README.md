@@ -483,12 +483,15 @@ Automatic shows use office-local time on each screen, with no AI calls or extra 
 
 Open **Office nonsense** at the top left to preview a show **only on this screen**. Clicking
 the hanging disco ball also starts a local disco. `?spectacle=conga|ufo|disco` previews one on
-load (use `?demo=busy&spectacle=ufo` without a server). The automatic shows also run on kiosks;
-preview controls are hidden there. Other screens select from their current visible sessions,
+load (use `?demo=busy&spectacle=ufo` without a server). Spectacles are **off on kiosks by default**; use
+`?kiosk=1&spectacles=1` to opt in. `?spectacles=0` disables the whole feature on any screen;
+preview controls are hidden while disabled and on kiosks. Other screens select from their current visible sessions,
 so choreography is cosmetic rather than a new shared gameplay state.
 
 Shows keep session status, desk ownership and the existing character simulation intact, with
-at most 256 proxy actors. Ended/offline characters are removed, and scene rebuilds cancel the
+at most 256 proxy actors. Waiting or burning sessions stay out so their waiting markers,
+ping rings and context fire remain visible; actors leave immediately if they start needing
+attention mid-show. Ended/offline characters are removed, and scene rebuilds cancel the
 current show and restore originals. Reduced-motion viewers get a static chair formation,
 steady lights and an in-place alien encounter rather than bobbing, sweeping or abduction travel.
 

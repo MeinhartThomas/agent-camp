@@ -4,6 +4,19 @@ import type { OfficeMap, Point } from "./map.ts";
 import { TILE } from "./map.ts";
 import { findPath } from "./pathing.ts";
 
+/** Client-only switch: ordinary screens opt out; wall screens explicitly opt in. */
+export function spectaclesEnabled(value: string | null, kiosk: boolean): boolean {
+  return value === null ? !kiosk : !["0", "false", "off"].includes(value);
+}
+
+/** Never conceal a session that currently needs the human\'s attention. */
+export function canJoinSpectacle(
+  session: { activity: Activity; offline: boolean; context?: number | undefined },
+  fireAt: number,
+): boolean {
+  return !session.offline && session.activity !== "waiting" && (session.context ?? 0) < fireAt;
+}
+
 export type Spectacle = "conga" | "ufo" | "disco";
 export const SPECTACLE_SECONDS: Record<Spectacle, number> = { conga: 35, ufo: 18, disco: 15 };
 export const SPECTACLES: readonly Spectacle[] = ["conga", "ufo", "disco"];

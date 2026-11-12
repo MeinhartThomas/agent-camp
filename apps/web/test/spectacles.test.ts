@@ -12,12 +12,14 @@ import { buildOfficeMap, TILE } from "../src/world/map.ts";
 import {
   abductionPose,
   angleToward,
+  canJoinSpectacle,
   congaRoute,
   hardestWorker,
   routeLength,
   routePose,
   SPECTACLE_SECONDS,
   scheduledSpectacle,
+  spectaclesEnabled,
   ufoLanding,
 } from "../src/world/spectacleRules.ts";
 
@@ -30,6 +32,22 @@ const session = (
 ) => ({ sessionId, activity, subagents, activitySince, offline });
 
 describe("office spectacles", () => {
+  test("client switch defaults off on kiosks, supports explicit opt-in and opt-out", () => {
+    expect(spectaclesEnabled(null, false)).toBe(true);
+    expect(spectaclesEnabled(null, true)).toBe(false);
+    for (const kiosk of [true, false]) {
+      expect(spectaclesEnabled("1", kiosk)).toBe(true);
+      for (const off of ["0", "false", "off"]) expect(spectaclesEnabled(off, kiosk)).toBe(false);
+    }
+  });
+  test("waiting, burning and offline sessions retain their normal indicators", () => {
+    expect(canJoinSpectacle({ activity: "typing", offline: false }, 0.8)).toBe(true);
+    expect(canJoinSpectacle({ activity: "waiting", offline: false }, 0.8)).toBe(false);
+    expect(canJoinSpectacle({ activity: "typing", offline: true }, 0.8)).toBe(false);
+    expect(canJoinSpectacle({ activity: "typing", offline: false, context: 0.79 }, 0.8)).toBe(true);
+    expect(canJoinSpectacle({ activity: "typing", offline: false, context: 0.8 }, 0.8)).toBe(false);
+    expect(canJoinSpectacle({ activity: "idle", offline: false, context: 1 }, 0.8)).toBe(false);
+  });
   test("duck watches active work, not idle/waiting/offline sessions", () => {
     const busy = session("busy", "typing", 2);
     expect(
