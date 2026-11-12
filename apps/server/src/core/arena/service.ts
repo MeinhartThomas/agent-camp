@@ -26,8 +26,7 @@ const KEY = "arena.v1",
   BUDGET = "arena.budget.v2";
 const archiveKey = (id: string) => `arena.match.${id}`;
 export const LOBBY_IDLE_MS = 10 * 60_000,
-  LOBBY_OFFLINE_MS = 2 * 60_000,
-  LOBBY_CHECK_MS = 30_000;
+  LOBBY_OFFLINE_MS = 2 * 60_000;
 const Strings = z.record(z.string().max(64), z.string().max(1600));
 const Journal = z
   .array(z.object({ turn: z.number().int(), actions: z.record(z.string(), z.unknown()) }))
@@ -51,8 +50,6 @@ const Stored = z.object({
   historyRevision: z.number().int().nonnegative().default(0),
   resultsDone: z.boolean().default(false),
   lobbyAt: z.number().default(0),
-  hostAt: z.number().default(0),
-  lobbyCheckAt: z.number().default(0),
   missing: z.record(z.string(), z.number()).default({}),
 });
 type Data = z.infer<typeof Stored>;
@@ -90,8 +87,6 @@ export class ArenaService {
       historyRevision: 0,
       resultsDone: true,
       lobbyAt: 0,
-      hostAt: 0,
-      lobbyCheckAt: 0,
       missing: {},
     };
     try {
@@ -123,7 +118,6 @@ export class ArenaService {
             }),
           );
           this.data.lobbyAt = this.now();
-          this.data.lobbyCheckAt = this.now();
           store.kvPut(KEY, JSON.stringify(this.data));
         }
       }
@@ -166,7 +160,7 @@ export class ArenaService {
   deadline(): number | null {
     if (!this.enabled || this.storageError) return null;
     return this.data.match?.phase === "lobby"
-      ? Math.min(this.data.lobbyAt + LOBBY_IDLE_MS, this.data.lobbyCheckAt + LOBBY_CHECK_MS)
+      ? this.data.lobbyAt + LOBBY_IDLE_MS
       : (this.data.match?.deadline ?? null);
   }
   private commit(): void {
@@ -239,26 +233,28 @@ export class ArenaService {
     this.data.failures = 0;
     this.data.journal = [];
     this.data.resultsDone = true;
-    this.data.lobbyAt = this.data.lobbyCheckAt = this.data.hostAt = this.now();
+    this.data.lobbyAt = this.now();
     this.data.missing = {};
     this.data.historyRevision++;
   }
-  private maintainLobby(): void {
+  /** Opportunistic cleanup on hub alarms/mutations; no periodic arena wakeups. */
+  private maintainLobby(): boolean {
     const m = this.data.match;
-    if (m?.phase !== "lobby") return;
+    if (m?.phase !== "lobby") return false;
     const now = this.now();
-    this.data.lobbyCheckAt = now;
     if (now - this.data.lobbyAt >= LOBBY_IDLE_MS) {
       this.data.match = null;
       this.data.prompts = {};
       this.data.missing = {};
-      return;
+      return true;
     }
+    const before = JSON.stringify([m.hostId, m.fighters.map((f) => f.personId), this.data.missing]);
     const online = this.hooks.online?.() ?? new Set(m.fighters.map((f) => f.personId));
     for (const f of m.fighters) {
       if (online.has(f.personId)) delete this.data.missing[f.personId];
       else if (!Object.hasOwn(this.data.missing, f.personId)) this.data.missing[f.personId] = now;
     }
+    const count = m.fighters.length;
     m.fighters = m.fighters.filter((f) => {
       if (online.has(f.personId) || now - this.data.missing[f.personId]! < LOBBY_OFFLINE_MS)
         return true;
@@ -266,19 +262,17 @@ export class ArenaService {
       delete this.data.missing[f.personId];
       return false;
     });
-    if (!online.has(m.hostId) || now - this.data.hostAt >= LOBBY_OFFLINE_MS) {
-      const successor = m.fighters.find((f) => f.personId !== m.hostId && online.has(f.personId));
-      if (successor) {
-        m.hostId = successor.personId;
-        this.data.hostAt = now;
-      }
+    if (!online.has(m.hostId)) {
+      const successor = m.fighters.find((f) => online.has(f.personId));
+      if (successor) m.hostId = successor.personId;
     }
-    if (
-      m.fighters.length === 0 &&
-      Object.keys(this.data.prompts).length === 0 &&
-      now - this.data.lobbyAt >= LOBBY_OFFLINE_MS
-    )
+    if (count > 0 && m.fighters.length === 0) {
       this.data.match = null;
+      return true;
+    }
+    return (
+      before !== JSON.stringify([m.hostId, m.fighters.map((f) => f.personId), this.data.missing])
+    );
   }
   mutate(
     input: unknown,
@@ -292,7 +286,7 @@ export class ArenaService {
     const parsed = ArenaMutation.safeParse(input);
     if (!parsed.success) return fail(400, "Invalid arena action");
     const a = parsed.data;
-    this.maintainLobby();
+    if (this.maintainLobby()) this.commit();
     let m = this.data.match;
     if (a.kind === "reveal") {
       const current = m?.id === a.matchId;
@@ -391,7 +385,7 @@ export class ArenaService {
       m.startedAt = this.now();
       m.deadline = this.now() + ARENA_RULES.countdownMs;
     }
-    if (this.data.match?.hostId === personId) this.data.hostAt = this.now();
+    if (a.kind === "join" || a.kind === "ready") this.data.lobbyAt = this.now();
     this.commit();
     return { status: 200, body: this.state() };
   }
@@ -402,13 +396,7 @@ export class ArenaService {
     const m = this.data.match;
     if (!m) return;
     if (m.phase === "lobby") {
-      const due = this.deadline()!;
-      if (due > this.now()) {
-        this.hooks.schedule(due);
-        return;
-      }
-      this.maintainLobby();
-      this.commit();
+      if (this.maintainLobby()) this.commit();
       return;
     }
     if (m.deadline === null) return;

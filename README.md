@@ -278,8 +278,8 @@ turns. Two fighters is a duel; larger matches are free-for-all, last fighter sta
 
 Anyone in the office can spectate. Matches include shields/healing/boost pickups, shrinking
 arena pressure, a results board, wins/knockout rankings, and rematches. Any connected claimed person can open
-a fresh lobby after a match. Offline or inactive hosts hand over; lobbies expire after ten
-minutes. Results and rankings load only when requested by the panel, never in turn broadcasts. Tactics stay private;
+a fresh lobby after a match. Only offline hosts hand over; join/ready actions renew a ten-minute
+idle expiry. Cleanup uses existing hub alarms without periodic arena lobby wakeups. Results and rankings load only when requested by the panel, never in turn broadcasts. Tactics stay private;
 after a match you may explicitly reveal only your own frozen prompt for that match.
 **Unlike connector telemetry, these deliberately entered tactics are sent to the configured
 AI provider and stored server-side. Never put secrets or customer information in them.**

@@ -131,20 +131,35 @@ test("offline hosts hand over, offline fighters are pruned, and idle lobbies exp
   expect(h.service.state().match).toBeNull();
   expect(h.mutate({ kind: "join", prompt: "x", loadout: "bow" }, "c").status).toBe(200);
 });
-test("unrelated hub alarms do not rewrite a lobby before its cleanup deadline", () => {
+test("unchanged hub alarms do not write/broadcast and only idle expiry is scheduled", () => {
   const h = setup();
   h.mutate({ kind: "join", prompt: "x", loadout: "blade" });
   h.store.writes = [];
-  h.setNow(1);
+  const frames = h.frames.length;
+  expect(h.service.deadline()).toBe(LOBBY_IDLE_MS);
+  h.setNow(60_000);
   for (let i = 0; i < 20; i++) h.service.tick();
   expect(h.store.writes).toEqual([]);
+  expect(h.frames.length).toBe(frames);
+  expect(h.service.deadline()).toBe(LOBBY_IDLE_MS);
 });
-test("an idle browser host yields even while its connector stays online", () => {
+test("an online host keeps host and participant join/ready renews idle expiry", () => {
   const h = setup();
   for (const id of ["a", "b"]) h.mutate({ kind: "join", prompt: "x", loadout: "blade" }, id);
-  h.setNow(LOBBY_OFFLINE_MS + 1);
+  const id = h.service.state().match!.id;
+  h.setNow(LOBBY_IDLE_MS / 2);
+  h.mutate({ kind: "ready", ready: true }, "b");
+  expect(h.service.deadline()).toBe(LOBBY_IDLE_MS * 1.5);
+  h.setNow(LOBBY_IDLE_MS + 1);
   h.service.tick();
-  expect(h.service.state().match?.hostId).toBe("b");
+  expect(h.service.state().match?.id).toBe(id);
+  expect(h.service.state().match?.hostId).toBe("a");
+  h.setNow(LOBBY_IDLE_MS * 1.5 - 1);
+  h.mutate({ kind: "join", prompt: "updated", loadout: "bow" }, "b");
+  expect(h.service.deadline()).toBe(LOBBY_IDLE_MS * 2.5 - 1);
+  h.setNow(LOBBY_IDLE_MS * 2.5);
+  h.service.tick();
+  expect(h.service.state().match).toBeNull();
 });
 test("legacy envelopes migrate history and budget once, not on each turn", () => {
   const h = setup();
